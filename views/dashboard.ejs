@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dashboard - Building Usage & Tenant Breakdown</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
+  <!-- Include Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+  <!-- Navigation Bar -->
+  <nav class="navbar navbar-expand-lg navbar-light bg-light mb-4">
+    <div class="container">
+      <a class="navbar-brand" href="/">Metering App</a>
+      <div class="collapse navbar-collapse">
+        <ul class="navbar-nav me-auto">
+          <li class="nav-item"><a class="nav-link" href="/">Home</a></li>
+          <li class="nav-item"><a class="nav-link" href="/tenants">Tenants</a></li>
+          <li class="nav-item active"><a class="nav-link" href="/dashboard">Dashboard</a></li>
+        </ul>
+      </div>
+    </div>
+  </nav>
+
+  <div class="container">
+    <!-- Month Filter Form -->
+    <div class="mb-4">
+      <form action="/dashboard" method="GET" class="row g-3 align-items-center">
+        <div class="col-auto">
+          <label for="monthFilter" class="col-form-label">Select Month:</label>
+        </div>
+        <div class="col-auto">
+          <input type="month" id="monthFilter" name="month" class="form-control" value="<%= filterMonth %>">
+        </div>
+        <div class="col-auto">
+          <button type="submit" class="btn btn-primary">Filter</button>
+        </div>
+      </form>
+    </div>
+
+    <!-- Building Usage Summary -->
+    <div class="mb-4">
+      <h3>Building Usage for <%= filterMonth %>: <%= buildingUsage.toFixed(3) %> kWh</h3>
+    </div>
+
+    <!-- Dashboard Cards for Each Tenant -->
+    <div class="row">
+      <% tenantData.forEach(data => { %>
+        <div class="col-md-4 mb-4">
+          <div class="card h-100">
+            <div class="card-body">
+              <h5 class="card-title"><%= data.tenant.unitNumber %> (<%= data.tenant.contactName %>)</h5>
+              <p class="card-text">Total Usage: <%= data.totalUsage.toFixed(3) %> kWh</p>
+              <canvas id="chart_<%= data.tenant._id %>" width="400" height="200"></canvas>
+            </div>
+          </div>
+        </div>
+      <% }); %>
+    </div>
+  </div>
+
+  <script>
+    <% tenantData.forEach(function(data) { 
+         var tenantId = data.tenant._id;
+         var usage = data.usage;
+         var labels = Object.keys(usage);
+         var values = labels.map(function(label) { return usage[label]; });
+    %>
+      var ctx = document.getElementById("chart_<%= tenantId %>").getContext("2d");
+      new Chart(ctx, {
+        type: 'bar',
+        data: {
+          labels: <%- JSON.stringify(labels) %>,
+          datasets: [{
+            label: 'Usage (kWh)',
+            data: <%- JSON.stringify(values) %>,
+            backgroundColor: 'rgba(75, 192, 192, 0.6)',
+            borderColor: 'rgba(75, 192, 192, 1)',
+            borderWidth: 1
+          }]
+        },
+        options: {
+          scales: {
+            y: {
+              beginAtZero: true,
+              title: {
+                display: true,
+                text: 'kWh'
+              }
+            },
+            x: {
+              title: {
+                display: true,
+                text: 'Meter ID'
+              }
+            }
+          },
+          plugins: {
+            legend: { display: false }
+          }
+        }
+      });
+    <% }); %>
+  </script>
+</body>
+</html>

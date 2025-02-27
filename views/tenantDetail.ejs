@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tenant Details</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
+  <style>
+    .scrollable-history {
+      max-height: 400px;
+      overflow-y: auto;
+    }
+  </style>
+</head>
+<body>
+  <!-- Navigation Bar -->
+  <nav class="navbar navbar-expand-lg navbar-light bg-light mb-4">
+    <div class="container">
+      <a class="navbar-brand" href="/">Metering App</a>
+      <div class="collapse navbar-collapse">
+        <ul class="navbar-nav me-auto">
+          <li class="nav-item"><a class="nav-link" href="/">Home</a></li>
+          <li class="nav-item"><a class="nav-link" href="/tenants">Tenants</a></li>
+          <li class="nav-item"><a class="nav-link" href="/tenants/new">New Tenant</a></li>
+          <li class="nav-item"><a class="nav-link" href="/meters">Meters & Assignments</a></li>
+		  <li class="nav-item"><a class="nav-link" href="/dashboard">Dashboard</a></li>
+        </ul>
+      </div>
+    </div>
+  </nav>
+
+  <div class="container">
+    <!-- Tenant Details Section -->
+    <div class="card mb-3">
+      <div class="card-body">
+        <h5 class="card-title">Unit Number: <%= tenant.unitNumber %></h5>
+        <p class="card-text">
+          <strong>Meter IDs:</strong> <%= tenant.meterIds.join(", ") %><br>
+          <strong>Account Number:</strong> <%= tenant.accountNumber %><br>
+          <strong>Contact Name:</strong> <%= tenant.contactName %><br>
+          <strong>Email:</strong> <%= tenant.email %>
+        </p>
+        <a href="/tenants/<%= tenant._id %>/edit" class="btn btn-primary">Edit Tenant</a>
+      </div>
+    </div>
+
+    <!-- Filter & Calculation Section -->
+    <div class="mb-4">
+      <h4>Filter Meter History & Calculate Totals</h4>
+      <form id="filterForm" class="row gy-2 gx-3 align-items-center">
+        <div class="col-auto">
+          <label class="visually-hidden" for="startDate">Start Date</label>
+          <input type="date" class="form-control" id="startDate" placeholder="Start Date">
+        </div>
+        <div class="col-auto">
+          <label class="visually-hidden" for="endDate">End Date</label>
+          <input type="date" class="form-control" id="endDate" placeholder="End Date">
+        </div>
+        <div class="col-auto">
+          <label class="visually-hidden" for="globalCost">Cost per kWh</label>
+          <input type="number" class="form-control" id="globalCost" step="0.01" placeholder="Cost per kWh" value="0.21">
+        </div>
+        <div class="col-auto">
+          <button type="button" id="calcBtn" class="btn btn-primary">Calculate Total</button>
+        </div>
+      </form>
+      <div id="calcResults" class="mt-2"></div>
+    </div>
+
+    <!-- Scrollable Meter History Table (Current Month Only) -->
+    <h3>Meter History (Current Month - kWHNet)</h3>
+    <% 
+      const currentMonth = new Date().toISOString().substring(0, 7);
+      let currentReadings = meterReadings.filter(r => r.date.substring(0, 7) === currentMonth);
+    %>
+    <% if (currentReadings && currentReadings.length > 0) { %>
+      <div class="scrollable-history">
+        <table class="table table-striped" id="historyTable">
+          <thead>
+            <tr>
+              <th>Meter</th>
+              <th>Date</th>
+              <th>Time</th>
+              <th>kWHNet</th>
+            </tr>
+          </thead>
+          <tbody>
+            <% currentReadings.forEach(reading => { %>
+              <tr data-date="<%= reading.date %>">
+                <td><%= reading.meter %></td>
+                <td><%= reading.date %></td>
+                <td><%= reading.time %></td>
+                <td>
+                  <% if (reading.kWHNet !== undefined && reading.kWHNet !== null && reading.kWHNet !== "") { %>
+                    <%= parseFloat(reading.kWHNet).toFixed(3) %>
+                  <% } else { %>
+                    N/A
+                  <% } %>
+                </td>
+              </tr>
+            <% }); %>
+          </tbody>
+        </table>
+      </div>
+    <% } else { %>
+      <p>No meter history found for the current month.</p>
+    <% } %>
+
+    <!-- Bar Graph for Monthly Totals -->
+    <h3 class="mt-5">Monthly Totals (kWHNet)</h3>
+    <canvas id="myChart" width="400" height="200"></canvas>
+
+    <!-- Email Invoice Section with Live Preview -->
+    <h4 class="mt-5">Email Invoice</h4>
+    <form action="/tenants/<%= tenant._id %>/invoice" method="POST" class="mb-4" id="invoiceForm">
+      <div class="mb-3">
+        <label for="invoiceStartDate" class="form-label">Start Date</label>
+        <input type="date" class="form-control" name="startDate" id="invoiceStartDate" required>
+      </div>
+      <div class="mb-3">
+        <label for="invoiceEndDate" class="form-label">End Date</label>
+        <input type="date" class="form-control" name="endDate" id="invoiceEndDate" required>
+      </div>
+      <div class="mb-3">
+        <label for="invoiceCost" class="form-label">Cost per kWh</label>
+        <input type="number" class="form-control" name="costPerKwh" id="invoiceCost" step="0.01" required value="0.21">
+      </div>
+      <!-- Live Preview Button -->
+      <button type="button" id="previewInvoiceBtn" class="btn btn-secondary">Preview Invoice</button>
+      <button type="submit" class="btn btn-success">Email Invoice</button>
+      <!-- Preview Display Area -->
+      <div id="invoicePreview" class="mt-3"></div>
+    </form>
+
+    <a href="/tenants" class="btn btn-secondary mb-5">Back to Tenants</a>
+  </div>
+
+  <!-- Pass meterReadings from server to client JS -->
+  <script>
+    var meterReadings = <%- JSON.stringify(meterReadings) %>;
+  </script>
+
+  <!-- Include Chart.js and ChartDataLabels plugin -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2"></script>
+  <script>
+    // --- Helper function for safe parsing ---
+    function safeParse(val) {
+      var num = parseFloat(val);
+      return isNaN(num) ? 0 : num;
+    }
+
+    // --- Function to calculate grouped usage (per meter) ---
+    function calculateGroupedUsage(rows) {
+      let groups = {};
+      rows.forEach(function(row) {
+          const meter = row.cells[0].textContent.trim();
+          const kwhText = row.cells[3].textContent.trim();
+          if (kwhText === "N/A" || kwhText === "") return;
+          const kwhVal = parseFloat(kwhText);
+          if (isNaN(kwhVal)) return;
+          if (!groups[meter]) {
+              groups[meter] = { min: kwhVal, max: kwhVal };
+          } else {
+              groups[meter].min = Math.min(groups[meter].min, kwhVal);
+              groups[meter].max = Math.max(groups[meter].max, kwhVal);
+          }
+      });
+      let totalUsage = 0;
+      Object.keys(groups).forEach(function(meter) {
+          totalUsage += groups[meter].max - groups[meter].min;
+      });
+      return totalUsage;
+    }
+
+    // --- Bar Graph for Monthly Totals ---
+    var grouped = {};
+    meterReadings.forEach(function(r) {
+        var month = r.date.substring(0, 7);
+        var meter = r.meter;
+        if (!grouped[meter]) {
+            grouped[meter] = {};
+        }
+        if (!grouped[meter][month]) {
+            grouped[meter][month] = { min: safeParse(r.kWHNet), max: safeParse(r.kWHNet) };
+        } else {
+            grouped[meter][month].min = Math.min(grouped[meter][month].min, safeParse(r.kWHNet));
+            grouped[meter][month].max = Math.max(grouped[meter][month].max, safeParse(r.kWHNet));
+        }
+    });
+
+    var monthlyTotals = {};
+    Object.keys(grouped).forEach(function(meter) {
+        Object.keys(grouped[meter]).forEach(function(month) {
+            var diff = grouped[meter][month].max - grouped[meter][month].min;
+            monthlyTotals[month] = (monthlyTotals[month] || 0) + diff;
+        });
+    });
+
+    var labels = Object.keys(monthlyTotals).sort();
+    var data = labels.map(function(month) { return monthlyTotals[month]; });
+
+    var ctx = document.getElementById('myChart').getContext('2d');
+    var myChart = new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels: labels,
+        datasets: [{
+          label: 'Monthly kWHNet Total',
+          data: data,
+          backgroundColor: 'rgba(54, 162, 235, 0.6)',
+          borderColor: 'rgba(54, 162, 235, 1)',
+          borderWidth: 1
+        }]
+      },
+      options: {
+        plugins: {
+          datalabels: {
+            anchor: 'end',
+            align: 'end',
+            formatter: function(value) {
+              return value.toFixed(3);
+            },
+            font: { weight: 'bold' }
+          }
+        },
+        scales: {
+          y: {
+            beginAtZero: true,
+            title: { display: true, text: 'kWHNet Total' }
+          },
+          x: {
+            title: { display: true, text: 'Month' }
+          }
+        }
+      },
+      plugins: [ChartDataLabels]
+    });
+
+    // --- Filter and Calculate Total for "Calculate Total" button (uses overall grouping) ---
+    document.getElementById("calcBtn").addEventListener("click", function() {
+      const startDate = document.getElementById("startDate").value;
+      const endDate = document.getElementById("endDate").value;
+      const costPerKwh = parseFloat(document.getElementById("globalCost").value) || 0;
+      
+      const allRows = Array.from(document.querySelectorAll("#historyTable tr"));
+      let filteredRows = allRows.filter(row => {
+        const rowDate = row.getAttribute("data-date");
+        return (!startDate || rowDate >= startDate) && (!endDate || rowDate <= endDate);
+      });
+      
+      // Use grouped calculation
+      const totalUsage = calculateGroupedUsage(filteredRows);
+      
+      let resultHtml = "";
+      if (isNaN(totalUsage)) {
+        resultHtml = "<p>No valid meter readings found for the specified date range.</p>";
+      } else {
+        const totalCost = totalUsage * costPerKwh;
+        resultHtml = `<strong>Total kWHNet (grouped per meter):</strong> ${totalUsage.toFixed(3)}<br>
+                      <strong>Total Cost:</strong> $${totalCost.toFixed(2)}`;
+      }
+      document.getElementById("calcResults").innerHTML = resultHtml;
+    });
+
+    // --- Live Invoice Preview Calculation ---
+    document.getElementById("previewInvoiceBtn").addEventListener("click", function() {
+      const invoiceStartDate = document.getElementById("invoiceStartDate").value;
+      const invoiceEndDate = document.getElementById("invoiceEndDate").value;
+      const costPerKwh = parseFloat(document.getElementById("invoiceCost").value) || 0;
+      
+      const allRows = Array.from(document.querySelectorAll("#historyTable tr"));
+      let filteredRows = allRows.filter(row => {
+        const rowDate = row.getAttribute("data-date");
+        return (!invoiceStartDate || rowDate >= invoiceStartDate) && (!invoiceEndDate || rowDate <= invoiceEndDate);
+      });
+      
+      const totalUsage = calculateGroupedUsage(filteredRows);
+      
+      let previewHtml = "";
+      if (isNaN(totalUsage)) {
+        previewHtml = "<p>No valid meter readings found for the specified invoice date range.</p>";
+      } else {
+        const totalCost = totalUsage * costPerKwh;
+        previewHtml = `<p><strong>Total kWHNet (grouped per meter):</strong> ${totalUsage.toFixed(3)}</p>
+                       <p><strong>Total Cost:</strong> $${totalCost.toFixed(2)}</p>`;
+      }
+      document.getElementById("invoicePreview").innerHTML = previewHtml;
+    });
+
+    // --- Invoice Calculation on Form Submission ---
+    document.querySelector("form[action*='/invoice']").addEventListener("submit", function(e) {
+      const invoiceStartDate = document.getElementById("invoiceStartDate").value;
+      const invoiceEndDate = document.getElementById("invoiceEndDate").value;
+      const costPerKwh = parseFloat(document.getElementById("invoiceCost").value) || 0;
+      
+      const allRows = Array.from(document.querySelectorAll("#historyTable tr"));
+      let filteredRows = allRows.filter(row => {
+        const rowDate = row.getAttribute("data-date");
+        return (!invoiceStartDate || rowDate >= invoiceStartDate) && (!invoiceEndDate || rowDate <= invoiceEndDate);
+      });
+      
+      const totalUsage = calculateGroupedUsage(filteredRows);
+      
+      if (isNaN(totalUsage)) {
+        alert("No valid meter readings found for the specified invoice date range.");
+        e.preventDefault();
+        return;
+      }
+      
+      const hiddenUsage = document.createElement('input');
+      hiddenUsage.type = 'hidden';
+      hiddenUsage.name = 'totalUsage';
+      hiddenUsage.value = totalUsage;
+      this.appendChild(hiddenUsage);
+      
+      const hiddenCost = document.createElement('input');
+      hiddenCost.type = 'hidden';
+      hiddenCost.name = 'totalCost';
+      hiddenCost.value = (totalUsage * costPerKwh).toFixed(2);
+      this.appendChild(hiddenCost);
+    });
+  </script>
+</body>
+</html>
