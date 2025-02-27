@@ -1,0 +1,43 @@
+/* public/css/global.css */
+
+/* Body and Typography */
+body {
+  background: #f8f9fa;
+  font-family: 'Arial', sans-serif;
+  color: #343a40;
+}
+
+/* Global Header Styles */
+.navbar {
+  background-color: #343a40;
+}
+
+.navbar-brand {
+  font-size: 1.5rem;
+  font-weight: bold;
+  color: #fff !important;
+}
+
+.navbar-nav .nav-link {
+  color: #fff !important;
+  padding: 0.5rem 1rem;
+}
+
+.navbar-nav .nav-link:hover,
+.navbar-nav .nav-link.active {
+  background-color: #495057;
+  border-radius: 0.25rem;
+}
+
+/* Dropdown Menu Styles */
+.dropdown-menu {
+  background-color: #343a40;
+}
+
+.dropdown-item {
+  color: #fff !important;
+}
+
+.dropdown-item:hover {
+  background-color: #495057;
+}
