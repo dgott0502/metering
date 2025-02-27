@@ -19,11 +19,13 @@ app.use(express.urlencoded({ extended: true })); // Parse POST bodies
 app.set("view engine", "ejs");
 
 app.use(session({
-  secret: "your-very-secret-key", // Change this to a strong secret in production
+  secret: "your-very-secret-key", // Replace with a strong secret in production
   resave: false,
   saveUninitialized: false,
-  cookie: { secure: false } // Set to true if using HTTPS
+  rolling: true, // Reset the cookie expiration on every response
+  cookie: { maxAge: 5 * 60 * 1000, secure: false } // 5 minutes, set secure to true in production with HTTPS
 }));
+
 
 const upload = multer({ dest: "uploads/" });
 
