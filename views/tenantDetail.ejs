@@ -126,7 +126,181 @@
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2"></script>
   <script>
-    // (Existing JS calculation code remains unchanged)
+    // --- Helper function for safe parsing ---
+    function safeParse(val) {
+      var num = parseFloat(val);
+      return isNaN(num) ? 0 : num;
+    }
+
+    // --- Function to calculate grouped usage (per meter) ---
+    function calculateGroupedUsage(rows) {
+      let groups = {};
+      rows.forEach(function(row) {
+          const meter = row.cells[0].textContent.trim();
+          const kwhText = row.cells[3].textContent.trim();
+          if (kwhText === "N/A" || kwhText === "") return;
+          const kwhVal = parseFloat(kwhText);
+          if (isNaN(kwhVal)) return;
+          if (!groups[meter]) {
+              groups[meter] = { min: kwhVal, max: kwhVal };
+          } else {
+              groups[meter].min = Math.min(groups[meter].min, kwhVal);
+              groups[meter].max = Math.max(groups[meter].max, kwhVal);
+          }
+      });
+      let totalUsage = 0;
+      Object.keys(groups).forEach(function(meter) {
+          totalUsage += groups[meter].max - groups[meter].min;
+      });
+      return totalUsage;
+    }
+
+    // --- Bar Graph for Monthly Totals ---
+    var grouped = {};
+    meterReadings.forEach(function(r) {
+        var month = r.date.substring(0, 7);
+        var meter = r.meter;
+        if (!grouped[meter]) {
+            grouped[meter] = {};
+        }
+        if (!grouped[meter][month]) {
+            grouped[meter][month] = { min: safeParse(r.kWHNet), max: safeParse(r.kWHNet) };
+        } else {
+            grouped[meter][month].min = Math.min(grouped[meter][month].min, safeParse(r.kWHNet));
+            grouped[meter][month].max = Math.max(grouped[meter][month].max, safeParse(r.kWHNet));
+        }
+    });
+
+    var monthlyTotals = {};
+    Object.keys(grouped).forEach(function(meter) {
+        Object.keys(grouped[meter]).forEach(function(month) {
+            var diff = grouped[meter][month].max - grouped[meter][month].min;
+            monthlyTotals[month] = (monthlyTotals[month] || 0) + diff;
+        });
+    });
+
+    var labels = Object.keys(monthlyTotals).sort();
+    var data = labels.map(function(month) { return monthlyTotals[month]; });
+
+    var ctx = document.getElementById('myChart').getContext('2d');
+    var myChart = new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels: labels,
+        datasets: [{
+          label: 'Monthly kWHNet Total',
+          data: data,
+          backgroundColor: 'rgba(54, 162, 235, 0.6)',
+          borderColor: 'rgba(54, 162, 235, 1)',
+          borderWidth: 1
+        }]
+      },
+      options: {
+        plugins: {
+          datalabels: {
+            anchor: 'end',
+            align: 'end',
+            formatter: function(value) {
+              return value.toFixed(3);
+            },
+            font: { weight: 'bold' }
+          }
+        },
+        scales: {
+          y: {
+            beginAtZero: true,
+            title: { display: true, text: 'kWHNet Total' }
+          },
+          x: {
+            title: { display: true, text: 'Month' }
+          }
+        }
+      },
+      plugins: [ChartDataLabels]
+    });
+
+    // --- Filter and Calculate Total for "Calculate Total" button ---
+    document.getElementById("calcBtn").addEventListener("click", function() {
+      const startDate = document.getElementById("startDate").value;
+      const endDate = document.getElementById("endDate").value;
+      const costPerKwh = parseFloat(document.getElementById("globalCost").value) || 0;
+      
+      const allRows = Array.from(document.querySelectorAll("#historyTable tr"));
+      let filteredRows = allRows.filter(row => {
+        const rowDate = row.getAttribute("data-date");
+        return (!startDate || rowDate >= startDate) && (!endDate || rowDate <= endDate);
+      });
+      
+      const totalUsage = calculateGroupedUsage(filteredRows);
+      
+      let resultHtml = "";
+      if (isNaN(totalUsage)) {
+        resultHtml = "<p>No valid meter readings found for the specified date range.</p>";
+      } else {
+        const totalCost = totalUsage * costPerKwh;
+        resultHtml = `<strong>Total kWHNet (grouped per meter):</strong> ${totalUsage.toFixed(3)}<br>
+                      <strong>Total Cost:</strong> $${totalCost.toFixed(2)}`;
+      }
+      document.getElementById("calcResults").innerHTML = resultHtml;
+    });
+
+    // --- Live Invoice Preview Calculation ---
+    document.getElementById("previewInvoiceBtn").addEventListener("click", function() {
+      const invoiceStartDate = document.getElementById("invoiceStartDate").value;
+      const invoiceEndDate = document.getElementById("invoiceEndDate").value;
+      const costPerKwh = parseFloat(document.getElementById("invoiceCost").value) || 0;
+      
+      const allRows = Array.from(document.querySelectorAll("#historyTable tr"));
+      let filteredRows = allRows.filter(row => {
+        const rowDate = row.getAttribute("data-date");
+        return (!invoiceStartDate || rowDate >= invoiceStartDate) && (!invoiceEndDate || rowDate <= invoiceEndDate);
+      });
+      
+      const totalUsage = calculateGroupedUsage(filteredRows);
+      
+      let previewHtml = "";
+      if (isNaN(totalUsage)) {
+        previewHtml = "<p>No valid meter readings found for the specified invoice date range.</p>";
+      } else {
+        const totalCost = totalUsage * costPerKwh;
+        previewHtml = `<p><strong>Total kWHNet (grouped per meter):</strong> ${totalUsage.toFixed(3)}</p>
+                       <p><strong>Total Cost:</strong> $${totalCost.toFixed(2)}</p>`;
+      }
+      document.getElementById("invoicePreview").innerHTML = previewHtml;
+    });
+
+    // --- Invoice Calculation on Form Submission ---
+    document.querySelector("form[action*='/invoice']").addEventListener("submit", function(e) {
+      const invoiceStartDate = document.getElementById("invoiceStartDate").value;
+      const invoiceEndDate = document.getElementById("invoiceEndDate").value;
+      const costPerKwh = parseFloat(document.getElementById("invoiceCost").value) || 0;
+      
+      const allRows = Array.from(document.querySelectorAll("#historyTable tr"));
+      let filteredRows = allRows.filter(row => {
+        const rowDate = row.getAttribute("data-date");
+        return (!invoiceStartDate || rowDate >= invoiceStartDate) && (!invoiceEndDate || rowDate <= invoiceEndDate);
+      });
+      
+      const totalUsage = calculateGroupedUsage(filteredRows);
+      
+      if (isNaN(totalUsage)) {
+        alert("No valid meter readings found for the specified invoice date range.");
+        e.preventDefault();
+        return;
+      }
+      
+      const hiddenUsage = document.createElement('input');
+      hiddenUsage.type = 'hidden';
+      hiddenUsage.name = 'totalUsage';
+      hiddenUsage.value = totalUsage;
+      this.appendChild(hiddenUsage);
+      
+      const hiddenCost = document.createElement('input');
+      hiddenCost.type = 'hidden';
+      hiddenCost.name = 'totalCost';
+      hiddenCost.value = (totalUsage * costPerKwh).toFixed(2);
+      this.appendChild(hiddenCost);
+    });
   </script>
 </body>
 </html>
