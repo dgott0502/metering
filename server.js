@@ -9,12 +9,21 @@ const multer = require("multer");
 const csvParser = require("csv-parser");
 const fs = require("fs");
 const cron = require("node-cron");
+const session = require("express-session");          // For session management
+const bcrypt = require("bcryptjs");                   // For password hashing
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(express.urlencoded({ extended: true })); // Parse POST bodies
 app.set("view engine", "ejs");
+
+app.use(session({
+  secret: "your-very-secret-key", // Change this to a strong secret in production
+  resave: false,
+  saveUninitialized: false,
+  cookie: { secure: false } // Set to true if using HTTPS
+}));
 
 const upload = multer({ dest: "uploads/" });
 
@@ -54,6 +63,13 @@ const meterReadingSchema = new mongoose.Schema({
 });
 meterReadingSchema.index({ meter: 1, date: 1, time: 1 }, { unique: true });
 const MeterReading = mongoose.model("MeterReading", meterReadingSchema);
+
+// ----- NEW: User Schema & Model -----
+const userSchema = new mongoose.Schema({
+  username: { type: String, unique: true, required: true },
+  password: { type: String, required: true }
+});
+const User = mongoose.model("User", userSchema);
 
 // ----- Metering Code -----
 const API_URL = "https://api.dentcloud.io/v1";
@@ -240,6 +256,80 @@ function scheduleJob(cronExpression, jobType) {
   console.log(`Job scheduled [${job.id}]: ${job.jobType} (${job.cronExpression})`);
   return job;
 }
+
+// ----- Public Authentication Routes -----
+app.get("/login", (req, res) => {
+  res.render("login", { error: null });
+});
+
+app.post("/login", async (req, res) => {
+  const { username, password } = req.body;
+  try {
+    const user = await User.findOne({ username });
+    if (!user) {
+      return res.render("login", { error: "Invalid username or password" });
+    }
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) {
+      return res.render("login", { error: "Invalid username or password" });
+    }
+    req.session.userId = user._id;
+    res.redirect("/");
+  } catch (err) {
+    console.error(err);
+    res.render("login", { error: "An error occurred. Please try again." });
+  }
+});
+
+app.get("/logout", (req, res) => {
+  req.session.destroy();
+  res.redirect("/login");
+});
+
+// ----- User Management Routes (Protected) -----
+function requireAuth(req, res, next) {
+  if (!req.session.userId) {
+    return res.redirect("/login");
+  }
+  next();
+}
+
+app.get("/users", requireAuth, async (req, res) => {
+  try {
+    const users = await User.find({});
+    res.render("users", { users });
+  } catch (err) {
+    res.status(500).send("Error retrieving users.");
+  }
+});
+
+app.get("/users/new", requireAuth, (req, res) => {
+  res.render("newUser", { error: null });
+});
+
+app.post("/users/new", requireAuth, async (req, res) => {
+  const { username, password } = req.body;
+  try {
+    const hashedPassword = await bcrypt.hash(password, 10);
+    await User.create({ username, password: hashedPassword });
+    res.redirect("/users");
+  } catch (err) {
+    console.error(err);
+    res.render("newUser", { error: "Error creating user. Username may already exist." });
+  }
+});
+
+// ----- Global Authentication Middleware -----
+// This middleware forces login on all routes except for "/login" and "/logout".
+app.use((req, res, next) => {
+  const publicPaths = ["/login", "/logout"];
+  if (!req.session.userId && !publicPaths.includes(req.path)) {
+    return res.redirect("/login");
+  }
+  next();
+});
+
+// ----- Existing Routes (All now protected by the global middleware) -----
 
 app.get("/cron/jobs", (req, res) => {
   res.json(jobList.map(job => ({ id: job.id, cronExpression: job.cronExpression, jobType: job.jobType })));
@@ -536,7 +626,6 @@ app.get("/tenants/new", async (req, res) => {
   }
 });
 
-
 app.post("/tenants", async (req, res) => {
   try {
     const { unitNumber, meterIds, accountNumber, contactName, email } = req.body;
@@ -591,7 +680,6 @@ app.get("/tenants/:id/edit", async (req, res) => {
     res.status(500).send("Error retrieving tenant details for edit.");
   }
 });
-
 
 // --- Updated POST route for editing tenant to handle checkbox input ---
 app.post("/tenants/:id/edit", async (req, res) => {
@@ -690,12 +778,6 @@ Metering App Team`
   }
 });
 
-app.listen(PORT, async () => {
-  console.log(`🚀 Server running on http://localhost:${PORT}`);
-  await loadMeters();
-  await loadTopics();
-});
-
 app.get("/dashboard", async (req, res) => {
   try {
     // Use the provided month filter or default to the current month (YYYY-MM)
@@ -750,5 +832,19 @@ app.get("/dashboard", async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).send("Error generating dashboard");
+  }
+});
+
+// ----- Start the Server and Create Default Admin User if Needed -----
+app.listen(PORT, async () => {
+  console.log(`🚀 Server running on http://localhost:${PORT}`);
+  await loadMeters();
+  await loadTopics();
+  // Create default admin user if not present
+  const adminUser = await User.findOne({ username: "Admin" });
+  if (!adminUser) {
+    const hashedPassword = await bcrypt.hash("Metering", 10);
+    await User.create({ username: "Admin", password: hashedPassword });
+    console.log("Default admin user created: username 'Admin', password 'Metering'");
   }
 });
