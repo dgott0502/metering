@@ -26,6 +26,7 @@ app.use(session({
   cookie: { maxAge: 5 * 60 * 1000, secure: false } // 5 minutes, set secure to true in production with HTTPS
 }));
 
+app.use(express.static('public'));
 
 const upload = multer({ dest: "uploads/" });
 
