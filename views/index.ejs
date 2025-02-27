@@ -20,18 +20,28 @@
 <body>
   <!-- Navigation Bar -->
   <nav class="navbar navbar-expand-lg navbar-light bg-light mb-4">
-    <div class="container">
-      <a class="navbar-brand" href="/">Metering App</a>
-      <div class="collapse navbar-collapse">
-        <ul class="navbar-nav me-auto">
-          <li class="nav-item"><a class="nav-link" href="/">Home</a></li>
-          <li class="nav-item"><a class="nav-link" href="/tenants">Tenants</a></li>
-          <li class="nav-item"><a class="nav-link" href="/tenants/new">New Tenant</a></li>
-		  <li class="nav-item"><a class="nav-link" href="/dashboard">Dashboard</a></li>
-        </ul>
-      </div>
+  <div class="container">
+    <a class="navbar-brand" href="/">Metering App</a>
+    <div class="collapse navbar-collapse">
+      <ul class="navbar-nav me-auto">
+        <li class="nav-item"><a class="nav-link" href="/">Home</a></li>
+        <li class="nav-item"><a class="nav-link" href="/tenants">Tenants</a></li>
+        <li class="nav-item"><a class="nav-link" href="/tenants/new">New Tenant</a></li>
+        <li class="nav-item"><a class="nav-link" href="/dashboard">Dashboard</a></li>
+        <!-- User Management Dropdown -->
+        <li class="nav-item dropdown">
+          <a class="nav-link dropdown-toggle" href="#" id="userManagementDropdown" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+            User Management
+          </a>
+          <ul class="dropdown-menu" aria-labelledby="userManagementDropdown">
+            <li><a class="dropdown-item" href="/users/new">New User</a></li>
+            <li><a class="dropdown-item" href="/users">Users</a></li>
+          </ul>
+        </li>
+      </ul>
     </div>
-  </nav>
+  </div>
+</nav>
 
   <div class="container">
     <h2>Meter Data Selection</h2>
