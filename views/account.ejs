@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Monthly Totals Dashboard</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
+  <link rel="stylesheet" href="/css/global.css">
+  <!-- Include Chart.js and the datalabels plugin -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2"></script>
+</head>
+<body>
+  <%- include('partials/header') %>
+  
+  <div class="container mt-5">
+    <% 
+      // 1) Fallback definitions in EJS if not passed from the route:
+      // If 'currentYear' isn't passed, use the actual current year.
+      var year = (typeof currentYear !== 'undefined') ? currentYear : new Date().getFullYear();
+      // If 'monthlyUsage' isn't passed, default to an empty object so we don't get a ReferenceError.
+      var monthlyUsageData = (typeof monthlyUsage !== 'undefined') ? monthlyUsage : {};
+      // If 'totalBuildingUsage' isn't passed, default to 0.
+      var totalUsage = (typeof totalBuildingUsage !== 'undefined') ? totalBuildingUsage : 0;
+    %>
+    
+    <h2>Account Dashboard for <%= accountNumber %></h2>
+    <h3>Monthly Totals for <%= year %></h3>
+    
+    <div class="card mb-4">
+      <div class="card-body">
+        <!-- Canvas for the bar chart -->
+        <canvas id="usageChart" width="600" height="400"></canvas>
+      </div>
+    </div>
+    
+    <div class="mb-4">
+      <h4>Total <%= year %> Usage: <%= totalUsage.toFixed(3) %> kWh</h4>
+	  <h4>Total Cost: $<%= (totalUsage * 0.21).toFixed(2) %></h4>
+
+    </div>
+  </div>
+  
+  <script>
+    // 2) Convert the EJS variables into JavaScript:
+    const year = <%= year %>;
+    const monthlyUsageData = <%- JSON.stringify(monthlyUsageData) %>;
+    const costRate = 0.21; // Adjust as needed for your cost/kWh
+    
+    console.log("EJS monthlyUsageData:", monthlyUsageData);
+    
+    // 3) Create an array of month keys in "YYYY-MM" format for the current year.
+    const monthNames = ["January","February","March","April","May","June",
+                        "July","August","September","October","November","December"];
+    const monthKeys = [];
+    for (let i = 1; i <= 12; i++) {
+      const m = i < 10 ? "0" + i : "" + i;
+      monthKeys.push(`${year}-${m}`);
+    }
+    
+    // 4) Build arrays for the chart: usageValues and costLabels
+    const usageValues = monthKeys.map(key => monthlyUsageData[key] || 0);
+    const costLabels = usageValues.map(val => "$" + (val * costRate).toFixed(2));
+    
+    // 5) Create x-axis labels from the month names plus year.
+    const labels = monthKeys.map(key => {
+      const monthNum = parseInt(key.substring(5), 10);
+      return monthNames[monthNum - 1] + " " + key.substring(0, 4);
+    });
+    
+    console.log("Month keys:", monthKeys);
+    console.log("Usage values:", usageValues);
+    console.log("Cost labels:", costLabels);
+    
+    // 6) Render the Chart.js bar chart
+    const ctx = document.getElementById("usageChart").getContext("2d");
+    new Chart(ctx, {
+      type: "bar",
+      data: {
+        labels: labels,
+        datasets: [{
+          label: "Usage (kWh)",
+          data: usageValues,
+          backgroundColor: "rgba(54, 162, 235, 0.6)",
+          borderColor: "rgba(54, 162, 235, 1)",
+          borderWidth: 1
+        }]
+      },
+      options: {
+        plugins: {
+          legend: { display: false },
+        datalabels: {
+  anchor: "end",
+  align: "start",
+  formatter: function(value, context) {
+    var label = costLabels[context.dataIndex];
+    return label === "$0.00" ? "" : label;
+  },
+  font: { weight: "bold" },
+  color: "#444"
+}
+        },
+        scales: {
+          y: {
+            beginAtZero: true,
+            title: { display: true, text: "Usage (kWh)" }
+          },
+          x: {
+            title: { display: true, text: "Month" }
+          }
+        }
+      },
+      plugins: [ChartDataLabels]
+    });
+  </script>
+  
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

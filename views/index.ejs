@@ -1,108 +1,16 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Meter Data</title>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" />
+  <meta charset="UTF-8">
+  <title>Home Page - Coming Soon</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
   <link rel="stylesheet" href="/css/global.css">
-  <script>
-    document.addEventListener("DOMContentLoaded", function () {
-      const form = document.querySelector("form");
-      form.addEventListener("submit", function () {
-        const dayInput = document.querySelector('input[name="day"]');
-        const hourInput = document.querySelector('input[name="hour"]');
-        if (!dayInput.value.trim()) dayInput.removeAttribute("name");
-        if (!hourInput.value.trim()) hourInput.removeAttribute("name");
-      });
-    });
-  </script>
 </head>
 <body>
   <%- include('partials/header') %>
-  
-  <div class="container">
-    <h2>Meter Data Selection</h2>
-    <form action="/fetch-data" method="POST">
-      <!-- Request Type -->
-      <div class="mb-3">
-        <label for="request" class="form-label">Request Type: <span class="text-danger">*</span></label>
-        <select class="form-select" name="request" id="request" required>
-          <option value="getData" <%= queryParams.request === 'getData' ? 'selected' : '' %>>getData</option>
-          <option value="getMeters" <%= queryParams.request === 'getMeters' ? 'selected' : '' %>>getMeters</option>
-          <option value="getTopics" <%= queryParams.request === 'getTopics' ? 'selected' : '' %>>getTopics</option>
-        </select>
-      </div>
-
-      <!-- Meter Selection -->
-      <div class="mb-3">
-        <label for="meter" class="form-label">Select Meter: <span class="text-danger">*</span></label>
-        <select class="form-select" name="meter" id="meter" required>
-          <% meters.forEach(meter => { %>
-            <option value="<%= meter %>" <%= meter === queryParams.meter ? 'selected' : '' %>><%= meter %></option>
-          <% }); %>
-        </select>
-      </div>
-
-      <!-- Year Field -->
-      <div class="mb-3">
-        <label for="year" class="form-label">Year: <span class="text-danger">*</span></label>
-        <input type="number" class="form-control" name="year" id="year" min="2000" max="2100" required 
-          value="<%= queryParams.year || new Date().getFullYear() %>">
-      </div>
-
-      <!-- Month Field -->
-      <div class="mb-3">
-        <label for="month" class="form-label">Month (01-12): <span class="text-danger">*</span></label>
-        <input type="number" class="form-control" name="month" id="month" min="1" max="12" required 
-          value="<%= queryParams.month || ("0" + (new Date().getMonth() + 1)).slice(-2) %>">
-      </div>
-
-      <!-- Day and Hour Fields -->
-      <div class="mb-3">
-        <label for="day" class="form-label">Day (01-31):</label>
-        <input type="number" class="form-control" name="day" id="day" min="1" max="31" value="<%= queryParams.day || '' %>">
-      </div>
-
-      <div class="mb-3">
-        <label for="hour" class="form-label">Hour (00-23):</label>
-        <input type="number" class="form-control" name="hour" id="hour" min="0" max="23" value="<%= queryParams.hour || '' %>">
-      </div>
-
-      <!-- Topics Selection -->
-      <div class="mb-3">
-        <label class="form-label">Select Topics: <span class="text-danger">*</span></label>
-        <div class="row">
-          <% availableTopics.forEach(topic => { %>
-            <div class="col-md-4">
-              <input type="checkbox" name="topics[]" value="<%= topic.requestKey %>" <%= queryParams.topics && queryParams.topics.includes(topic.requestKey) ? 'checked' : '' %>>
-              <%= topic.description %> (<%= topic.unit %>)
-            </div>
-          <% }); %>
-        </div>
-      </div>
-
-      <button type="submit" class="btn btn-primary mt-3">Fetch Data</button>
-    </form>
-
-    <hr>
-    <h3>Cron Job Manager</h3>
-    <p>Current Scheduled Jobs: <strong><%= cronSchedule %></strong></p>
-    <form action="/cron" method="POST" class="mb-5">
-      <div class="mb-3">
-        <label for="jobType" class="form-label">Job Type</label>
-        <select class="form-select" name="jobType" id="jobType" required>
-          <option value="Load Meters">Load Meters</option>
-          <option value="Fetch Meter Data">Fetch Meter Data</option>
-        </select>
-      </div>
-      <div class="mb-3">
-        <label for="cronExpression" class="form-label">Cron Expression</label>
-        <input type="text" class="form-control" name="cronExpression" id="cronExpression" placeholder="e.g. */15 * * * *" required>
-        <div class="form-text">Enter a valid cron expression (e.g., "*/15 * * * *" for every 15 minutes).</div>
-      </div>
-      <button type="submit" class="btn btn-secondary">Add Cron Job</button>
-    </form>
+  <div class="container mt-5">
+    <h1>Welcome to the New Home Page</h1>
+    <p>This page is under construction. Stay tuned for updates.</p>
   </div>
 </body>
 </html>

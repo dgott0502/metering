@@ -10,17 +10,39 @@
   <%- include('partials/header') %>
   
   <div class="container mt-5">
-    <h2>Users</h2>
+    <h2>Users Management</h2>
     <table class="table table-bordered">
       <thead>
         <tr>
           <th>Username</th>
+          <th>Role</th>
+          <th>Account Number</th>
+          <th>New Password</th>
+          <th>Actions</th>
         </tr>
       </thead>
       <tbody>
         <% users.forEach(function(user) { %>
           <tr>
-            <td><%= user.username %></td>
+            <form action="/users/<%= user._id %>/update" method="POST">
+              <td><%= user.username %></td>
+              <td>
+                <select name="role" class="form-select">
+                  <option value="admin" <%= user.role === "admin" ? "selected" : "" %>>Admin</option>
+                  <option value="reporting" <%= user.role === "reporting" ? "selected" : "" %>>Reporting</option>
+                  <option value="user" <%= user.role === "user" ? "selected" : "" %>>User</option>
+                </select>
+              </td>
+              <td>
+                <input type="text" name="accountNumber" placeholder="Account Number" value="<%= user.accountNumber || '' %>" class="form-control">
+              </td>
+              <td>
+                <input type="password" name="newPassword" placeholder="Reset Password" class="form-control">
+              </td>
+              <td>
+                <button type="submit" class="btn btn-primary btn-sm">Update</button>
+              </td>
+            </form>
           </tr>
         <% }); %>
       </tbody>

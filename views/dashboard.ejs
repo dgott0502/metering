@@ -43,6 +43,41 @@
         </div>
       <% }); %>
     </div>
+
+    <!-- Pagination & Page Size Selector -->
+    <div class="d-flex justify-content-between align-items-center mt-4">
+      <!-- Page size selector -->
+      <div>
+        <form method="GET" action="/dashboard" class="d-inline">
+          <input type="hidden" name="month" value="<%= filterMonth %>">
+          <label for="limitSelect">Dashboards per page: </label>
+          <select id="limitSelect" name="limit" onchange="this.form.submit()">
+            <% for(let opt = 9; opt <= 99; opt += 9) { %>
+              <option value="<%= opt %>" <%= (limit == opt) ? 'selected' : '' %>><%= opt %></option>
+            <% } %>
+          </select>
+        </form>
+      </div>
+
+      <!-- Pagination controls -->
+      <div>
+        <nav>
+          <ul class="pagination mb-0">
+            <li class="page-item <%= currentPage == 1 ? 'disabled' : '' %>">
+              <a class="page-link" href="?month=<%= filterMonth %>&page=<%= currentPage - 1 %>&limit=<%= limit %>">Previous</a>
+            </li>
+            <% for (let i = 1; i <= totalPages; i++) { %>
+              <li class="page-item <%= currentPage == i ? 'active' : '' %>">
+                <a class="page-link" href="?month=<%= filterMonth %>&page=<%= i %>&limit=<%= limit %>"><%= i %></a>
+              </li>
+            <% } %>
+            <li class="page-item <%= currentPage == totalPages ? 'disabled' : '' %>">
+              <a class="page-link" href="?month=<%= filterMonth %>&page=<%= currentPage + 1 %>&limit=<%= limit %>">Next</a>
+            </li>
+          </ul>
+        </nav>
+      </div>
+    </div>
   </div>
 
   <script>

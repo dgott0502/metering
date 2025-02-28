@@ -9,25 +9,24 @@ const multer = require("multer");
 const csvParser = require("csv-parser");
 const fs = require("fs");
 const cron = require("node-cron");
-const session = require("express-session");          // For session management
-const bcrypt = require("bcryptjs");                   // For password hashing
+const session = require("express-session");
+const bcrypt = require("bcryptjs");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.use(express.urlencoded({ extended: true })); // Parse POST bodies
+app.use(express.urlencoded({ extended: true }));
 app.set("view engine", "ejs");
 
 app.use(session({
   secret: "your-very-secret-key", // Replace with a strong secret in production
   resave: false,
   saveUninitialized: false,
-  rolling: true, // Reset the cookie expiration on every response
-  cookie: { maxAge: 5 * 60 * 1000, secure: false } // 5 minutes, set secure to true in production with HTTPS
+  rolling: true,
+  cookie: { maxAge: 5 * 60 * 1000, secure: false }
 }));
 
 app.use(express.static('public'));
-
 const upload = multer({ dest: "uploads/" });
 
 // Connect to MongoDB
@@ -67,12 +66,8 @@ const meterReadingSchema = new mongoose.Schema({
 meterReadingSchema.index({ meter: 1, date: 1, time: 1 }, { unique: true });
 const MeterReading = mongoose.model("MeterReading", meterReadingSchema);
 
-// ----- NEW: User Schema & Model -----
-const userSchema = new mongoose.Schema({
-  username: { type: String, unique: true, required: true },
-  password: { type: String, required: true }
-});
-const User = mongoose.model("User", userSchema);
+// ----- User Schema & Model -----
+const User = require("./models/User.js"); // Ensure this includes accountNumber & role fields
 
 // ----- Metering Code -----
 const API_URL = "https://api.dentcloud.io/v1";
@@ -81,7 +76,7 @@ const HEADERS = {
   "x-key-id": process.env.KEY_ID
 };
 
-const CACHE_EXPIRATION = 60 * 60 * 1000; // 1 hour
+const CACHE_EXPIRATION = 60 * 60 * 1000;
 let cachedMeters = { data: [], lastUpdated: 0 };
 let cachedTopics = { data: [], lastUpdated: 0 };
 
@@ -104,11 +99,7 @@ async function loadMeters() {
       cachedMeters = { data: meters, lastUpdated: Date.now() };
       logApiRequest("getMeters", fullUrl, params, response.data);
       for (const meterId of meters) {
-        await Meter.updateOne(
-          { meterId },
-          { $setOnInsert: { meterId } },
-          { upsert: true }
-        );
+        await Meter.updateOne({ meterId }, { $setOnInsert: { meterId } }, { upsert: true });
       }
     } catch (error) {
       console.error("Error fetching meters:", error.message);
@@ -249,12 +240,7 @@ function scheduleJob(cronExpression, jobType) {
   } else {
     return null;
   }
-  const job = {
-    id: jobIdCounter++,
-    cronExpression,
-    jobType,
-    task
-  };
+  const job = { id: jobIdCounter++, cronExpression, jobType, task };
   jobList.push(job);
   console.log(`Job scheduled [${job.id}]: ${job.jobType} (${job.cronExpression})`);
   return job;
@@ -289,71 +275,109 @@ app.get("/logout", (req, res) => {
   res.redirect("/login");
 });
 
-// ----- User Management Routes (Protected) -----
-function requireAuth(req, res, next) {
-  if (!req.session.userId) {
-    return res.redirect("/login");
+// ----- Middleware to Attach Logged-In User -----
+app.use(async (req, res, next) => {
+  if (req.session.userId) {
+    try {
+      const user = await User.findById(req.session.userId);
+      req.user = user;
+      res.locals.user = user;
+    } catch (err) {
+      console.error("Error fetching user:", err);
+    }
   }
   next();
-}
-
-app.get("/users", requireAuth, async (req, res) => {
-  try {
-    const users = await User.find({});
-    res.render("users", { users });
-  } catch (err) {
-    res.status(500).send("Error retrieving users.");
-  }
-});
-
-app.get("/users/new", requireAuth, (req, res) => {
-  res.render("newUser", { error: null });
-});
-
-app.post("/users/new", requireAuth, async (req, res) => {
-  const { username, password } = req.body;
-  try {
-    const hashedPassword = await bcrypt.hash(password, 10);
-    await User.create({ username, password: hashedPassword });
-    res.redirect("/users");
-  } catch (err) {
-    console.error(err);
-    res.render("newUser", { error: "Error creating user. Username may already exist." });
-  }
 });
 
 // ----- Global Authentication Middleware -----
-// This middleware forces login on all routes except for "/login" and "/logout".
+function requireAuth(req, res, next) {
+  if (!req.session.userId) return res.redirect("/login");
+  next();
+}
 app.use((req, res, next) => {
   const publicPaths = ["/login", "/logout"];
-  if (!req.session.userId && !publicPaths.includes(req.path)) {
-    return res.redirect("/login");
-  }
+  if (!req.session.userId && !publicPaths.includes(req.path)) return res.redirect("/login");
   next();
 });
 
-// ----- Existing Routes (All now protected by the global middleware) -----
+// ----- Role-Based Middleware -----
+function requireRole(role) {
+  return function(req, res, next) {
+    if (req.user && req.user.role === role) return next();
+    res.status(403).send("Forbidden: You do not have the required permissions.");
+  };
+}
+function requireReporting(req, res, next) {
+  if (req.user && (req.user.role === "admin" || req.user.role === "reporting")) return next();
+  res.status(403).send("Forbidden: You do not have the required permissions.");
+}
 
-app.get("/cron/jobs", (req, res) => {
-  res.json(jobList.map(job => ({ id: job.id, cronExpression: job.cronExpression, jobType: job.jobType })));
-});
-
-app.post("/cron", (req, res) => {
-  const { cronExpression, jobType } = req.body;
-  const job = scheduleJob(cronExpression, jobType);
-  if (job) {
-    res.send(`<script>alert("Job added: ${job.jobType} (${job.cronExpression})"); window.location.href="/";</script>`);
-  } else {
-    res.send(`<script>alert("Failed to add job. Check job type."); window.location.href="/";</script>`);
+// ----- Tenant Routes -----
+// List all tenants (for admin/reporting)
+app.get("/tenants", requireAuth, requireReporting, async (req, res) => {
+  try {
+    const tenants = await Tenant.find({});
+    res.render("tenants", { tenants });
+  } catch (err) {
+    res.status(500).send("Error retrieving tenants.");
   }
 });
 
+// Show form to create a new tenant
+app.get("/tenants/new", requireAuth, async (req, res) => {
+  try {
+    const tenants = await Tenant.find({});
+    let assigned = {};
+    tenants.forEach(tenant => {
+      tenant.meterIds.forEach(mid => { assigned[mid] = true; });
+    });
+    const uniqueMeters = await MeterReading.distinct("meter");
+    let available = [];
+    uniqueMeters.forEach(meter => {
+      if (!assigned[meter]) available.push(meter);
+    });
+    res.render("newTenant", { availableMeters: available });
+  } catch (err) {
+    res.status(500).send("Error retrieving available meters for new tenant.");
+  }
+});
+
+// Handle new tenant creation
+app.post("/tenants", requireAuth, async (req, res) => {
+  try {
+    const { unitNumber, meterIds, accountNumber, contactName, email } = req.body;
+    const meterIdArray = Array.isArray(meterIds)
+      ? meterIds
+      : (meterIds ? meterIds.split(",").map(id => id.trim()) : []);
+    const tenant = new Tenant({
+      unitNumber,
+      meterIds: meterIdArray,
+      accountNumber,
+      contactName,
+      email,
+      history: []
+    });
+    await tenant.save();
+    res.redirect("/tenants");
+  } catch (err) {
+    res.status(500).send("Error creating tenant.");
+  }
+});
+// Export Tenant List as CSV
 app.get("/tenants/export", async (req, res) => {
   try {
-    const tenants = await Tenant.find({}).lean();
+    let tenants = await Tenant.find({}).lean();
+    
+    // Transform meterIds array into a comma-separated string for each tenant.
+    tenants = tenants.map(tenant => {
+      tenant.meterIds = tenant.meterIds.join(",");
+      return tenant;
+    });
+    
     const fields = ["unitNumber", "meterIds", "accountNumber", "contactName", "email"];
     const json2csvParser = new Parser({ fields });
     const csv = json2csvParser.parse(tenants);
+    
     res.header("Content-Type", "text/csv");
     res.attachment("tenants.csv");
     return res.send(csv);
@@ -362,6 +386,7 @@ app.get("/tenants/export", async (req, res) => {
   }
 });
 
+// Import Tenant List from CSV
 app.post("/tenants/import", upload.single("file"), async (req, res) => {
   const results = [];
   fs.createReadStream(req.file.path)
@@ -370,6 +395,7 @@ app.post("/tenants/import", upload.single("file"), async (req, res) => {
     .on("end", async () => {
       try {
         for (let tenantData of results) {
+          // Convert meterIds from a comma-separated string to an array
           if (typeof tenantData.meterIds === "string") {
             tenantData.meterIds = tenantData.meterIds.split(",").map(id => id.trim());
           }
@@ -393,41 +419,253 @@ app.post("/tenants/import", upload.single("file"), async (req, res) => {
     });
 });
 
-app.get("/tenants/csv", async (req, res) => {
-  await loadMeters();
-  const tenants = await Tenant.find({});
-  let assigned = {};
-  tenants.forEach(tenant => {
-    tenant.meterIds.forEach(mid => { assigned[mid] = true; });
-  });
-  let available = [];
-  cachedMeters.data.forEach(baseMeter => {
-    if (!assigned[baseMeter + "_A"]) available.push(baseMeter + "_A");
-    if (!assigned[baseMeter + "_B"]) available.push(baseMeter + "_B");
-  });
-  res.render("tenantsCsv", { availableMeters: available, tenants });
+// View tenant details
+app.get("/tenants/:id", requireAuth, async (req, res) => {
+  try {
+    const tenant = await Tenant.findById(req.params.id);
+    if (!tenant) return res.status(404).send("Tenant not found.");
+    const meterReadings = await MeterReading.find({ meter: { $in: tenant.meterIds } }).sort({ date: 1, time: 1 });
+    res.render("tenantDetail", { tenant, meterReadings });
+  } catch (err) {
+    res.status(500).send("Error retrieving tenant details.");
+  }
 });
 
-app.get("/tenants/email", async (req, res) => {
-  const tenants = await Tenant.find({});
-  res.render("tenantsEmail", { tenants });
+// Show form to edit a tenant
+app.get("/tenants/:id/edit", requireAuth, async (req, res) => {
+  try {
+    const tenant = await Tenant.findById(req.params.id);
+    if (!tenant) return res.status(404).send("Tenant not found.");
+    const otherTenants = await Tenant.find({ _id: { $ne: tenant._id } });
+    let assigned = {};
+    otherTenants.forEach(t => {
+      t.meterIds.forEach(mid => { assigned[mid] = true; });
+    });
+    const uniqueMeters = await MeterReading.distinct("meter");
+    let available = [];
+    uniqueMeters.forEach(meter => {
+      if (!assigned[meter]) available.push(meter);
+    });
+    // Ensure tenant's current meters are included.
+    tenant.meterIds.forEach(mid => {
+      if (!available.includes(mid)) available.push(mid);
+    });
+    res.render("editTenant", { tenant, availableMeters: available });
+  } catch (err) {
+    res.status(500).send("Error retrieving tenant details for edit.");
+  }
 });
 
-app.get("/", async (req, res) => {
-  await loadMeters();
-  await loadTopics();
-  res.render("index", {
-    meters: cachedMeters.data,
-    availableTopics: cachedTopics.data,
-    meterData: {},
-    queryParams: {},
-    monthlyConsumption: {},
-    monthlyDetails: {},
-    costPerKwh: 0.10,
-    cronSchedule: jobList.map(job => `${job.jobType}: ${job.cronExpression}`).join(" | ")
-  });
+// Handle tenant updates
+app.post("/tenants/:id/edit", requireAuth, async (req, res) => {
+  try {
+    const { unitNumber, meterIds, accountNumber, contactName, email } = req.body;
+    const meterIdArray = Array.isArray(meterIds)
+      ? meterIds
+      : (meterIds ? meterIds.split(",").map(id => id.trim()) : []);
+    await Tenant.findByIdAndUpdate(req.params.id, {
+      unitNumber,
+      meterIds: meterIdArray,
+      accountNumber,
+      contactName,
+      email
+    });
+    res.redirect("/tenants/" + req.params.id);
+  } catch (err) {
+    res.status(500).send("Error updating tenant details.");
+  }
+});
+// Handle invoice email for a specific tenant
+app.post("/tenants/:id/invoice", requireAuth, async (req, res) => {
+  try {
+    const { startDate, endDate, costPerKwh } = req.body;
+    const tenant = await Tenant.findById(req.params.id);
+    if (!tenant) return res.status(404).send("Tenant not found.");
+    
+    // Get tenant's meter readings and sort them
+    const meterReadings = await MeterReading.find({ meter: { $in: tenant.meterIds } }).sort({ date: 1, time: 1 });
+    
+    let minKWH = Infinity;
+    let maxKWH = -Infinity;
+    meterReadings.forEach(r => {
+      if ((startDate && r.date < startDate) || (endDate && r.date > endDate)) return;
+      const value = safeNumber(r.kWHNet);
+      if (value < minKWH) minKWH = value;
+      if (value > maxKWH) maxKWH = value;
+    });
+    if (minKWH === Infinity || maxKWH === -Infinity) {
+      return res.status(400).send("No valid meter readings found in the specified date range.");
+    }
+    
+    const totalKWH = maxKWH - minKWH;
+    const totalCost = totalKWH * parseFloat(costPerKwh);
+    
+    const mailOptions = {
+      from: process.env.EMAIL_USER,
+      to: tenant.email,
+      subject: `Invoice for Unit ${tenant.unitNumber}`,
+      text: `Hello ${tenant.contactName},
+
+Here is your usage invoice for the period ${startDate} to ${endDate}:
+Total kWHNet: ${totalKWH.toFixed(3)} kWh
+Cost per kWh: $${parseFloat(costPerKwh).toFixed(2)}
+Total Amount Due: $${totalCost.toFixed(2)}
+
+Please remit payment via check.
+
+Thank you,
+Metering App Team`
+    };
+    
+    await transporter.sendMail(mailOptions);
+    res.send(`<script>alert("Invoice email sent successfully."); window.location.href="/tenants";</script>`);
+    
+  } catch (err) {
+    console.error("Error sending invoice email:", err);
+    res.send(`<script>alert("Error sending invoice email."); window.location.href="/tenants";</script>`);
+  }
 });
 
+// ----- Dashboard Route for Admin/Reporting Users -----
+app.get("/dashboard", requireAuth, requireReporting, async (req, res) => {
+  try {
+    let filterMonth = req.query.month;
+    if (!filterMonth) {
+      const now = new Date();
+      filterMonth = now.toISOString().substring(0, 7);
+    }
+    // Read page and limit query parameters (defaulting to page 1 and 9 dashboards per page)
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 9;
+
+    const tenants = await Tenant.find({});
+    let tenantData = [];
+    let buildingUsage = 0;
+    for (let tenant of tenants) {
+      const readings = await MeterReading.find({
+        meter: { $in: tenant.meterIds },
+        date: { $regex: '^' + filterMonth }
+      }).sort({ date: 1, time: 1 });
+      let usagePerMeter = {};
+      tenant.meterIds.forEach(meter => { usagePerMeter[meter] = { min: Infinity, max: -Infinity }; });
+      readings.forEach(r => {
+        const meter = r.meter;
+        const value = r.kWHNet;
+        if (value < usagePerMeter[meter].min) usagePerMeter[meter].min = value;
+        if (value > usagePerMeter[meter].max) usagePerMeter[meter].max = value;
+      });
+      let usageFinal = {};
+      let totalUsage = 0;
+      for (let meter in usagePerMeter) {
+        const group = usagePerMeter[meter];
+        if (group.min === Infinity || group.max === -Infinity) {
+          usageFinal[meter] = 0;
+        } else {
+          const usage = group.max - group.min;
+          usageFinal[meter] = usage;
+          totalUsage += usage;
+        }
+      }
+      buildingUsage += totalUsage;
+      tenantData.push({ tenant, usage: usageFinal, totalUsage });
+    }
+
+    // Pagination: calculate total pages and slice tenantData for the current page.
+    const totalTenants = tenantData.length;
+    const totalPages = Math.ceil(totalTenants / limit);
+    const paginatedTenantData = tenantData.slice((page - 1) * limit, page * limit);
+
+    res.render("dashboard", { 
+      tenantData: paginatedTenantData, 
+      buildingUsage, 
+      filterMonth,
+      currentPage: page,
+      totalPages,
+      limit
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).send("Error generating dashboard");
+  }
+});
+
+
+// ----- Account Route: Fixed Dashboard for the Current Year -----
+app.get("/account", requireAuth, async (req, res) => {
+  if (req.user.role !== "user") return res.redirect("/");
+  try {
+    const accountNumber = req.user.accountNumber;
+    const currentYear = new Date().getFullYear();
+    
+    // Find all tenants for this account.
+    const tenants = await Tenant.find({ accountNumber });
+    
+    // Collect all meter IDs from these tenants.
+    let meterIds = [];
+    tenants.forEach(tenant => {
+      meterIds.push(...tenant.meterIds);
+    });
+    meterIds = [...new Set(meterIds)];
+    
+    // Find all readings for the current year (assuming date format "YYYY-MM-DD")
+    const regexYear = '^' + currentYear;
+    const readings = await MeterReading.find({
+      meter: { $in: meterIds },
+      date: { $regex: regexYear }
+    }).sort({ date: 1, time: 1 });
+    
+    // Group readings by month (first 7 characters "YYYY-MM")
+    let grouped = {};
+    readings.forEach(r => {
+      const monthKey = r.date.substring(0, 7);
+      const meter = r.meter;
+      const value = parseFloat(r.kWHNet) || 0;
+      if (!grouped[monthKey]) grouped[monthKey] = {};
+      if (!grouped[monthKey][meter]) {
+        grouped[monthKey][meter] = { min: value, max: value };
+      } else {
+        grouped[monthKey][meter].min = Math.min(grouped[monthKey][meter].min, value);
+        grouped[monthKey][meter].max = Math.max(grouped[monthKey][meter].max, value);
+      }
+    });
+    
+    // Compute usage for each month by summing (max-min) per meter.
+    let monthlyUsage = {};
+    // Initialize for all 12 months.
+    for (let m = 1; m <= 12; m++) {
+      let monthStr = m < 10 ? "0" + m : "" + m;
+      monthlyUsage[`${currentYear}-${monthStr}`] = 0;
+    }
+    for (let month in grouped) {
+      let monthTotal = 0;
+      for (let meter in grouped[month]) {
+        monthTotal += grouped[month][meter].max - grouped[month][meter].min;
+      }
+      monthlyUsage[month] = monthTotal;
+    }
+    
+    // Total usage for the year.
+    let totalBuildingUsage = 0;
+    for (let key in monthlyUsage) {
+      totalBuildingUsage += monthlyUsage[key];
+    }
+    
+    res.render("account", {
+      accountNumber,
+      currentYear,
+      monthlyUsage,
+      totalBuildingUsage
+    });
+    
+  } catch (err) {
+    console.error("Error generating account dashboard", err);
+    res.status(500).send("Error generating account dashboard");
+  }
+});
+
+// ----- Other Routes (e.g., /fetch-data, /api, etc.) remain unchanged -----
+
+// Fetch Data Route
 app.post(
   "/fetch-data",
   [
@@ -441,7 +679,8 @@ app.post(
   ],
   async (req, res) => {
     const errors = validationResult(req);
-    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+    if (!errors.isEmpty())
+      return res.status(400).json({ errors: errors.array() });
     
     if (req.body.topics && !Array.isArray(req.body.topics)) {
       req.body.topics = [req.body.topics];
@@ -465,6 +704,7 @@ app.post(
     const combinedTopics = allMeterData.flat();
     const meterData = { topics: combinedTopics };
     
+    // Process meterData and update readings...
     for (const reading of meterData.topics) {
       Object.keys(reading).forEach(async key => {
         if (key.startsWith("kWHNet/Elm/")) {
@@ -524,7 +764,7 @@ app.post(
       }
     }
     
-    res.render("index", {
+    res.render("api", {
       meters: cachedMeters.data,
       availableTopics: cachedTopics.data,
       meterData,
@@ -532,322 +772,109 @@ app.post(
       monthlyConsumption,
       monthlyDetails,
       costPerKwh,
-      cronSchedule: jobList.map(job => `${job.jobType}: ${job.cronExpression}`).join(" | ")
+      cronSchedule: jobList.map(job => `${job.jobType}: ${job.cronExpression}`).join(" | "),
+      newLinesCount: 0
     });
   }
 );
 
-app.get("/tenants", async (req, res) => {
+// ----- Home Route -----
+app.get("/", requireAuth, (req, res) => {
+  res.render("index");
+});
+
+// ----- API Route -----
+app.get("/api", requireAuth, async (req, res) => {
+  await loadMeters();
+  await loadTopics();
+  res.render("api", {
+    meters: cachedMeters.data,
+    availableTopics: cachedTopics.data,
+    meterData: {},
+    queryParams: {},
+    monthlyConsumption: {},
+    monthlyDetails: {},
+    costPerKwh: 0.21,
+    cronSchedule: jobList.map(job => `${job.jobType}: ${job.cronExpression}`).join(" | ")
+  });
+});
+
+// ----- User Management Routes -----
+app.get("/users", requireAuth, requireRole("admin"), async (req, res) => {
   try {
-    const tenants = await Tenant.find({});
-    res.render("tenants", { tenants });
+    const users = await User.find({});
+    res.render("users", { users });
   } catch (err) {
-    res.status(500).send("Error retrieving tenants.");
+    res.status(500).send("Error retrieving users.");
   }
 });
 
-app.post("/tenants/delete", async (req, res) => {
-  try {
-    const ids = req.body.tenantIds;
-    const tenantIds = Array.isArray(ids) ? ids : [ids];
-    if (!tenantIds || tenantIds.length === 0) {
-      return res.redirect("/tenants");
-    }
-    await Tenant.deleteMany({ _id: { $in: tenantIds } });
-    res.redirect("/tenants");
-  } catch (err) {
-    res.status(500).send("Error deleting tenants.");
-  }
+app.get("/users/new", requireAuth, (req, res) => {
+  res.render("newUser", { error: null });
 });
 
-app.post("/tenants/emailMultiple", async (req, res) => {
+app.post("/users/new", requireAuth, async (req, res) => {
+  const { username, password, accountNumber } = req.body;
   try {
-    let { tenantIds, startDate, endDate, costPerKwh } = req.body;
-    if (!tenantIds) {
-      return res.status(400).send("No tenants selected.");
-    }
-    tenantIds = Array.isArray(tenantIds) ? tenantIds : [tenantIds];
-    for (const id of tenantIds) {
-      const tenant = await Tenant.findById(id);
-      if (!tenant) continue;
-      const meterReadings = await MeterReading.find({ meter: { $in: tenant.meterIds } }).sort({ date: 1, time: 1 });
-      let minKWH = Infinity;
-      let maxKWH = -Infinity;
-      meterReadings.forEach(r => {
-        if ((startDate && r.date < startDate) || (endDate && r.date > endDate)) return;
-        let value = safeNumber(r.kWHNet);
-        if (value < minKWH) minKWH = value;
-        if (value > maxKWH) maxKWH = value;
-      });
-      if (minKWH === Infinity || maxKWH === -Infinity) continue;
-      const totalKWH = maxKWH - minKWH;
-      const totalCost = totalKWH * parseFloat(costPerKwh);
-      const mailOptions = {
-        from: process.env.EMAIL_USER,
-        to: tenant.email,
-        subject: `Usage Invoice for Unit ${tenant.unitNumber}`,
-        text: `Hello ${tenant.contactName},
-
-Here is your usage invoice for the period ${startDate} to ${endDate}:
-Total kWHNet: ${totalKWH.toFixed(3)} kWh
-Cost per kWh: $${parseFloat(costPerKwh).toFixed(2)}
-Total Amount Due: $${totalCost.toFixed(2)}
-
-Please remit payment via check.
-
-Thank you,
-Metering App Team`
-      };
-      await transporter.sendMail(mailOptions);
-    }
-    res.send(`<script>alert("Usage invoice emails sent successfully."); window.location.href="/tenants";</script>`);
-  } catch (err) {
-    console.error("Error sending usage invoice emails:", err);
-    res.send(`<script>alert("Error sending usage invoice emails."); window.location.href="/tenants";</script>`);
-  }
-});
-
-app.get("/tenants/new", async (req, res) => {
-  try {
-    // Get all existing tenants and their assigned meters.
-    const tenants = await Tenant.find({});
-    let assigned = {};
-    tenants.forEach(tenant => {
-      tenant.meterIds.forEach(mid => { assigned[mid] = true; });
-    });
-
-    // Get unique meters from the MeterReading collection (used by the Meters & Assignments page)
-    const uniqueMeters = await MeterReading.distinct("meter");
-    let available = [];
-    uniqueMeters.forEach(meter => {
-      if (!assigned[meter]) available.push(meter);
-    });
-
-    res.render("newTenant", { availableMeters: available });
-  } catch (err) {
-    res.status(500).send("Error retrieving available meters for new tenant.");
-  }
-});
-
-app.post("/tenants", async (req, res) => {
-  try {
-    const { unitNumber, meterIds, accountNumber, contactName, email } = req.body;
-    const meterIdArray = Array.isArray(meterIds)
-      ? meterIds
-      : (meterIds ? meterIds.split(",").map(id => id.trim()) : []);
-    const tenant = new Tenant({
-      unitNumber,
-      meterIds: meterIdArray,
-      accountNumber,
-      contactName,
-      email,
-      history: []
-    });
-    await tenant.save();
-    res.redirect("/tenants");
-  } catch (err) {
-    res.status(500).send("Error creating tenant.");
-  }
-});
-
-// --- Updated GET route for editing tenant with available meters ---
-app.get("/tenants/:id/edit", async (req, res) => {
-  try {
-    // Retrieve the tenant to be edited.
-    const tenant = await Tenant.findById(req.params.id);
-    if (!tenant) return res.status(404).send("Tenant not found.");
-
-    // Get all tenants except the current one.
-    const otherTenants = await Tenant.find({ _id: { $ne: tenant._id } });
-    let assigned = {};
-    otherTenants.forEach(t => {
-      t.meterIds.forEach(mid => { assigned[mid] = true; });
-    });
-
-    // Pull available meters from the MeterReading collection (as in the Meters & Assignments page).
-    const uniqueMeters = await MeterReading.distinct("meter");
-    let available = [];
-    uniqueMeters.forEach(meter => {
-      if (!assigned[meter]) {
-        available.push(meter);
-      }
-    });
-
-    // Ensure the tenant's currently assigned meters are also included.
-    tenant.meterIds.forEach(mid => {
-      if (!available.includes(mid)) available.push(mid);
-    });
-
-    res.render("editTenant", { tenant, availableMeters: available });
-  } catch (err) {
-    res.status(500).send("Error retrieving tenant details for edit.");
-  }
-});
-
-// --- Updated POST route for editing tenant to handle checkbox input ---
-app.post("/tenants/:id/edit", async (req, res) => {
-  try {
-    const { unitNumber, meterIds, accountNumber, contactName, email } = req.body;
-    const meterIdArray = Array.isArray(meterIds) ? meterIds : (meterIds ? meterIds.split(",").map(id => id.trim()) : []);
-    await Tenant.findByIdAndUpdate(req.params.id, {
-      unitNumber,
-      meterIds: meterIdArray,
-      accountNumber,
-      contactName,
-      email
-    });
-    res.redirect("/tenants/" + req.params.id);
-  } catch (err) {
-    res.status(500).send("Error updating tenant details.");
-  }
-});
-
-app.get("/tenants/:id", async (req, res) => {
-  try {
-    const tenant = await Tenant.findById(req.params.id);
-    if (!tenant) return res.status(404).send("Tenant not found.");
-    const meterReadings = await MeterReading.find({ meter: { $in: tenant.meterIds } }).sort({ date: 1, time: 1 });
-    res.render("tenantDetail", { tenant, meterReadings });
-  } catch (err) {
-    res.status(500).send("Error retrieving tenant details.");
-  }
-});
-
-app.get("/meters", async (req, res) => {
-  try {
-    const uniqueMeters = await MeterReading.distinct("meter");
-    const tenants = await Tenant.find({});
-    let assigned = {};
-    tenants.forEach(tenant => {
-      tenant.meterIds.forEach(mid => {
-        assigned[mid] = `${tenant.unitNumber} (${tenant.contactName})`;
-      });
-    });
-    let assignedMeters = [];
-    let unassignedMeters = [];
-    uniqueMeters.forEach(mid => {
-      if (assigned[mid]) {
-        assignedMeters.push({ meter: mid, tenant: assigned[mid] });
-      } else {
-        unassignedMeters.push(mid);
-      }
-    });
-    res.render("meters", { assignedMeters, unassignedMeters });
-  } catch (err) {
-    res.status(500).send("Error retrieving meter assignments.");
-  }
-});
-
-app.post("/tenants/:id/invoice", async (req, res) => {
-  try {
-    const { startDate, endDate, costPerKwh } = req.body;
-    const tenant = await Tenant.findById(req.params.id);
-    if (!tenant) return res.status(404).send("Tenant not found.");
-    const meterReadings = await MeterReading.find({ meter: { $in: tenant.meterIds } }).sort({ date: 1, time: 1 });
-    let minKWH = Infinity;
-    let maxKWH = -Infinity;
-    meterReadings.forEach(r => {
-      if ((startDate && r.date < startDate) || (endDate && r.date > endDate)) return;
-      let value = safeNumber(r.kWHNet);
-      if (value < minKWH) minKWH = value;
-      if (value > maxKWH) maxKWH = value;
-    });
-    if (minKWH === Infinity || maxKWH === -Infinity) {
-      return res.status(400).send("No valid meter readings found in the specified date range.");
-    }
-    const totalKWH = maxKWH - minKWH;
-    const totalCost = totalKWH * parseFloat(costPerKwh);
-    const mailOptions = {
-      from: process.env.EMAIL_USER,
-      to: tenant.email,
-      subject: `Invoice for Unit ${tenant.unitNumber}`,
-      text: `Hello ${tenant.contactName},
-
-Please find your invoice details below for the period ${startDate} to ${endDate}:
-Total kWHNet: ${totalKWH.toFixed(3)} kWh
-Cost per kWh: $${parseFloat(costPerKwh).toFixed(2)}
-Total Amount Due: $${totalCost.toFixed(2)}
-
-Please remit payment via check.
-
-Thank you,
-Metering App Team`
-    };
-    await transporter.sendMail(mailOptions);
-    res.send(`<script>alert("Invoice email sent successfully."); window.location.href="/tenants";</script>`);
-  } catch (err) {
-    console.error("Error sending invoice email:", err);
-    res.send(`<script>alert("Error sending invoice email."); window.location.href="/tenants";</script>`);
-  }
-});
-
-app.get("/dashboard", async (req, res) => {
-  try {
-    // Use the provided month filter or default to the current month (YYYY-MM)
-    let filterMonth = req.query.month;
-    if (!filterMonth) {
-      const now = new Date();
-      filterMonth = now.toISOString().substring(0, 7);
-    }
-    // Get all tenants
-    const tenants = await Tenant.find({});
-    let tenantData = [];
-    let buildingUsage = 0;
-    // Process each tenant
-    for (let tenant of tenants) {
-      // Find meter readings for tenant's meters where the date starts with filterMonth
-      const readings = await MeterReading.find({
-        meter: { $in: tenant.meterIds },
-        date: { $regex: '^' + filterMonth }
-      }).sort({ date: 1, time: 1 });
-      
-      // Group readings by meter ID to calculate usage (max - min)
-      let usagePerMeter = {};
-      tenant.meterIds.forEach(meter => {
-        usagePerMeter[meter] = { min: Infinity, max: -Infinity };
-      });
-      readings.forEach(r => {
-        const meter = r.meter;
-        const value = r.kWHNet;
-        if (value < usagePerMeter[meter].min) usagePerMeter[meter].min = value;
-        if (value > usagePerMeter[meter].max) usagePerMeter[meter].max = value;
-      });
-      let usageFinal = {};
-      let totalUsage = 0;
-      for (let meter in usagePerMeter) {
-        const group = usagePerMeter[meter];
-        if (group.min === Infinity || group.max === -Infinity) {
-          usageFinal[meter] = 0;
-        } else {
-          const usage = group.max - group.min;
-          usageFinal[meter] = usage;
-          totalUsage += usage;
-        }
-      }
-      buildingUsage += totalUsage;
-      tenantData.push({
-        tenant,
-        usage: usageFinal,
-        totalUsage
-      });
-    }
-    res.render("dashboard", { tenantData, buildingUsage, filterMonth });
+    const hashedPassword = await bcrypt.hash(password, 10);
+    await User.create({ username, password: hashedPassword, accountNumber });
+    res.redirect("/users");
   } catch (err) {
     console.error(err);
-    res.status(500).send("Error generating dashboard");
+    res.render("newUser", { error: "Error creating user. Username may already exist." });
   }
 });
 
-// ----- Start the Server and Create Default Admin User if Needed -----
+app.post("/users/:id/update", requireAuth, requireRole("admin"), async (req, res) => {
+  const { role, newPassword, accountNumber } = req.body;
+  try {
+    let updateFields = { role, accountNumber };
+    if (newPassword && newPassword.trim().length > 0) {
+      const hashedPassword = await bcrypt.hash(newPassword, 10);
+      updateFields.password = hashedPassword;
+    }
+    await User.findByIdAndUpdate(req.params.id, updateFields);
+    res.redirect("/users");
+  } catch (err) {
+    console.error(err);
+    res.status(500).send("Error updating user.");
+  }
+});
+
+// ----- Routes for Admin/Reporting Users -----
+app.get("/tenants/email", async (req, res) => {
+  const tenants = await Tenant.find({});
+  res.render("tenantsEmail", { tenants });
+});
+
+app.get("/tenants/csv", async (req, res) => {
+  await loadMeters();
+  const tenants = await Tenant.find({});
+  let assigned = {};
+  tenants.forEach(tenant => {
+    tenant.meterIds.forEach(mid => { assigned[mid] = true; });
+  });
+  let available = [];
+  cachedMeters.data.forEach(baseMeter => {
+    if (!assigned[baseMeter + "_A"]) available.push(baseMeter + "_A");
+    if (!assigned[baseMeter + "_B"]) available.push(baseMeter + "_B");
+  });
+  res.render("tenantsCsv", { availableMeters: available, tenants });
+});
+
+// ----- Start the Server and Create/Update Default Admin User if Needed -----
 app.listen(PORT, async () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
   await loadMeters();
   await loadTopics();
-  // Create default admin user if not present
   const adminUser = await User.findOne({ username: "Admin" });
   if (!adminUser) {
     const hashedPassword = await bcrypt.hash("Metering", 10);
-    await User.create({ username: "Admin", password: hashedPassword });
+    await User.create({ username: "Admin", password: hashedPassword, role: "admin" });
     console.log("Default admin user created: username 'Admin', password 'Metering'");
+  } else if (adminUser.role !== "admin") {
+    adminUser.role = "admin";
+    await adminUser.save();
+    console.log("Admin user updated with role 'admin'");
   }
 });
