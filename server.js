@@ -87,7 +87,7 @@ let cachedTopics = { data: [], lastUpdated: 0 };
 
 function logApiRequest(endpoint, fullUrl, params, response) {
   console.log("\n=====================================");
-  console.log(🚀 OUTGOING API Request: ${fullUrl});
+  console.log(`🚀 OUTGOING API Request: ${fullUrl}`);
   console.log("📌 Endpoint:", endpoint);
   console.log("📌 Parameters:", params);
   console.log("✅ API Response:", JSON.stringify(response, null, 2));
@@ -98,7 +98,7 @@ async function loadMeters() {
   if (Date.now() - cachedMeters.lastUpdated > CACHE_EXPIRATION) {
     try {
       const params = { request: "getMeters" };
-      const fullUrl = ${API_URL}?${new URLSearchParams(params).toString()};
+      const fullUrl = `${API_URL}?${new URLSearchParams(params).toString()}`;
       const response = await axios.get(fullUrl, { headers: HEADERS });
       const meters = response.data.meters || [];
       cachedMeters = { data: meters, lastUpdated: Date.now() };
@@ -120,7 +120,7 @@ async function loadTopics() {
   if (Date.now() - cachedTopics.lastUpdated > CACHE_EXPIRATION) {
     try {
       const params = { request: "getTopics" };
-      const fullUrl = ${API_URL}?${new URLSearchParams(params).toString()};
+      const fullUrl = `${API_URL}?${new URLSearchParams(params).toString()}`;
       const response = await axios.get(fullUrl, { headers: HEADERS });
       cachedTopics = { data: response.data.topics || [], lastUpdated: Date.now() };
       logApiRequest("getTopics", fullUrl, params, response.data);
@@ -141,7 +141,7 @@ async function fetchMeterData(params) {
     }
   }
   try {
-    const fullUrl = ${API_URL}?${new URLSearchParams(params).toString()};
+    const fullUrl = `${API_URL}?${new URLSearchParams(params).toString()}`;
     console.log("\nFULL API REQUEST:", fullUrl);
     const response = await axios.get(fullUrl, { headers: HEADERS });
     logApiRequest("getData", fullUrl, params, response.data);
@@ -217,7 +217,7 @@ function scheduleJob(cronExpression, jobType) {
             month: ("0" + (new Date().getMonth() + 1)).slice(-2)
           };
           const result = await fetchMeterData(params);
-          console.log(Fetched data for meter ${meterId}:, result);
+          console.log(`Fetched data for meter ${meterId}:`, result);
           if (result.topics) {
             for (const reading of result.topics) {
               Object.keys(reading).forEach(async key => {
@@ -235,7 +235,7 @@ function scheduleJob(cronExpression, jobType) {
                     await MeterReading.updateOne(filter, { $setOnInsert: update }, { upsert: true });
                   } catch (err) {
                     if (err.code !== 11000)
-                      console.error(Error upserting meter reading for ${meterSuffix}:, err);
+                      console.error(`Error upserting meter reading for ${meterSuffix}:`, err);
                   }
                 }
               });
@@ -256,7 +256,7 @@ function scheduleJob(cronExpression, jobType) {
     task
   };
   jobList.push(job);
-  console.log(Job scheduled [${job.id}]: ${job.jobType} (${job.cronExpression}));
+  console.log(`Job scheduled [${job.id}]: ${job.jobType} (${job.cronExpression})`);
   return job;
 }
 
@@ -342,9 +342,9 @@ app.post("/cron", (req, res) => {
   const { cronExpression, jobType } = req.body;
   const job = scheduleJob(cronExpression, jobType);
   if (job) {
-    res.send(<script>alert("Job added: ${job.jobType} (${job.cronExpression})"); window.location.href="/";</script>);
+    res.send(`<script>alert("Job added: ${job.jobType} (${job.cronExpression})"); window.location.href="/";</script>`);
   } else {
-    res.send(<script>alert("Failed to add job. Check job type."); window.location.href="/";</script>);
+    res.send(`<script>alert("Failed to add job. Check job type."); window.location.href="/";</script>`);
   }
 });
 
@@ -384,9 +384,9 @@ app.post("/tenants/import", upload.single("file"), async (req, res) => {
             await Tenant.create(tenantData);
           }
         }
-        res.send(<script>alert("Tenants imported successfully."); window.location.href="/tenants";</script>);
+        res.send(`<script>alert("Tenants imported successfully."); window.location.href="/tenants";</script>`);
       } catch (err) {
-        res.send(<script>alert("Error importing tenants."); window.location.href="/tenants";</script>);
+        res.send(`<script>alert("Error importing tenants."); window.location.href="/tenants";</script>`);
       } finally {
         fs.unlinkSync(req.file.path);
       }
@@ -424,7 +424,7 @@ app.get("/", async (req, res) => {
     monthlyConsumption: {},
     monthlyDetails: {},
     costPerKwh: 0.10,
-    cronSchedule: jobList.map(job => ${job.jobType}: ${job.cronExpression}).join(" | ")
+    cronSchedule: jobList.map(job => `${job.jobType}: ${job.cronExpression}`).join(" | ")
   });
 });
 
@@ -481,7 +481,7 @@ app.post(
             await MeterReading.updateOne(filter, { $setOnInsert: update }, { upsert: true });
           } catch (err) {
             if (err.code !== 11000)
-              console.error(Error upserting meter reading for ${meterSuffix}:, err);
+              console.error(`Error upserting meter reading for ${meterSuffix}:`, err);
           }
         }
       });
@@ -532,7 +532,7 @@ app.post(
       monthlyConsumption,
       monthlyDetails,
       costPerKwh,
-      cronSchedule: jobList.map(job => ${job.jobType}: ${job.cronExpression}).join(" | ")
+      cronSchedule: jobList.map(job => `${job.jobType}: ${job.cronExpression}`).join(" | ")
     });
   }
 );
@@ -585,8 +585,8 @@ app.post("/tenants/emailMultiple", async (req, res) => {
       const mailOptions = {
         from: process.env.EMAIL_USER,
         to: tenant.email,
-        subject: Usage Invoice for Unit ${tenant.unitNumber},
-        text: Hello ${tenant.contactName},
+        subject: `Usage Invoice for Unit ${tenant.unitNumber}`,
+        text: `Hello ${tenant.contactName},
 
 Here is your usage invoice for the period ${startDate} to ${endDate}:
 Total kWHNet: ${totalKWH.toFixed(3)} kWh
@@ -596,14 +596,14 @@ Total Amount Due: $${totalCost.toFixed(2)}
 Please remit payment via check.
 
 Thank you,
-Metering App Team
+Metering App Team`
       };
       await transporter.sendMail(mailOptions);
     }
-    res.send(<script>alert("Usage invoice emails sent successfully."); window.location.href="/tenants";</script>);
+    res.send(`<script>alert("Usage invoice emails sent successfully."); window.location.href="/tenants";</script>`);
   } catch (err) {
     console.error("Error sending usage invoice emails:", err);
-    res.send(<script>alert("Error sending usage invoice emails."); window.location.href="/tenants";</script>);
+    res.send(`<script>alert("Error sending usage invoice emails."); window.location.href="/tenants";</script>`);
   }
 });
 
@@ -720,7 +720,7 @@ app.get("/meters", async (req, res) => {
     let assigned = {};
     tenants.forEach(tenant => {
       tenant.meterIds.forEach(mid => {
-        assigned[mid] = ${tenant.unitNumber} (${tenant.contactName});
+        assigned[mid] = `${tenant.unitNumber} (${tenant.contactName})`;
       });
     });
     let assignedMeters = [];
@@ -760,8 +760,8 @@ app.post("/tenants/:id/invoice", async (req, res) => {
     const mailOptions = {
       from: process.env.EMAIL_USER,
       to: tenant.email,
-      subject: Invoice for Unit ${tenant.unitNumber},
-      text: Hello ${tenant.contactName},
+      subject: `Invoice for Unit ${tenant.unitNumber}`,
+      text: `Hello ${tenant.contactName},
 
 Please find your invoice details below for the period ${startDate} to ${endDate}:
 Total kWHNet: ${totalKWH.toFixed(3)} kWh
@@ -771,13 +771,13 @@ Total Amount Due: $${totalCost.toFixed(2)}
 Please remit payment via check.
 
 Thank you,
-Metering App Team
+Metering App Team`
     };
     await transporter.sendMail(mailOptions);
-    res.send(<script>alert("Invoice email sent successfully."); window.location.href="/tenants";</script>);
+    res.send(`<script>alert("Invoice email sent successfully."); window.location.href="/tenants";</script>`);
   } catch (err) {
     console.error("Error sending invoice email:", err);
-    res.send(<script>alert("Error sending invoice email."); window.location.href="/tenants";</script>);
+    res.send(`<script>alert("Error sending invoice email."); window.location.href="/tenants";</script>`);
   }
 });
 
@@ -840,7 +840,7 @@ app.get("/dashboard", async (req, res) => {
 
 // ----- Start the Server and Create Default Admin User if Needed -----
 app.listen(PORT, async () => {
-  console.log(🚀 Server running on http://localhost:${PORT});
+  console.log(`🚀 Server running on http://localhost:${PORT}`);
   await loadMeters();
   await loadTopics();
   // Create default admin user if not present
