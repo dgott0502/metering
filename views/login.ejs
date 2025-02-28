@@ -8,53 +8,18 @@
 <body>
   <div class="container mt-5">
     <h2>Login</h2>
-
-    <!-- If there's an error passed in, show it in a Bootstrap alert -->
     <% if (error) { %>
       <div class="alert alert-danger"><%= error %></div>
     <% } %>
-
     <form action="/login" method="POST">
-      <!-- Username -->
       <div class="mb-3">
         <label for="username" class="form-label">Username</label>
-        <input
-          type="text"
-          name="username"
-          id="username"
-          class="form-control"
-          required
-          <% if (typeof username !== 'undefined') { %> value="<%= username %>" <% } %>
-        >
+        <input type="text" name="username" id="username" class="form-control" required>
       </div>
-
-      <!-- Password -->
       <div class="mb-3">
         <label for="password" class="form-label">Password</label>
-        <input
-          type="password"
-          name="password"
-          id="password"
-          class="form-control"
-          required
-        >
+        <input type="password" name="password" id="password" class="form-control" required>
       </div>
-
-      <!-- 2FA Token (only shown if user has 2FA enabled) -->
-      <% if (show2FA) { %>
-        <div class="mb-3">
-          <label for="token" class="form-label">2FA Code</label>
-          <input
-            type="text"
-            name="token"
-            id="token"
-            class="form-control"
-            placeholder="Enter your 6-digit code"
-            required
-          >
-        </div>
-      <% } %>
-
       <button type="submit" class="btn btn-primary">Login</button>
     </form>
   </div>
