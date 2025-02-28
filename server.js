@@ -30,7 +30,7 @@ app.use(express.static('public'));
 const upload = multer({ dest: "uploads/" });
 
 // Connect to MongoDB
-mongoose.connect(process.env.MONGO_URI || "mongodb://localhost:27017/metering");
+mongoose.connect(process.env.MONGO_URI || "mongodb+srv://dan:19CvK3bklPcYN4A8@metering.unlgv.mongodb.net/?retryWrites=true&w=majority&appName=Metering");
 
 // ----- Meter Schema & Model -----
 const meterSchema = new mongoose.Schema({
