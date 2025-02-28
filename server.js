@@ -9,13 +9,17 @@ const multer = require("multer");
 const csvParser = require("csv-parser");
 const fs = require("fs");
 const cron = require("node-cron");
-const session = require("express-session");          // For session management
-const bcrypt = require("bcryptjs");                   // For password hashing
+const session = require("express-session");
+const bcrypt = require("bcryptjs");
+
+// ----- 2FA Dependencies -----
+const speakeasy = require("speakeasy");
+const QRCode = require("qrcode");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.use(express.urlencoded({ extended: true })); // Parse POST bodies
+app.use(express.urlencoded({ extended: true }));
 app.set("view engine", "ejs");
 
 app.use(session({
@@ -23,14 +27,14 @@ app.use(session({
   resave: false,
   saveUninitialized: false,
   rolling: true, // Reset the cookie expiration on every response
-  cookie: { maxAge: 5 * 60 * 1000, secure: false } // 5 minutes, set secure to true in production with HTTPS
+  cookie: { maxAge: 5 * 60 * 1000, secure: false } // 5 minutes; secure=true in production with HTTPS
 }));
 
-app.use(express.static('public'));
+app.use(express.static("public"));
 
 const upload = multer({ dest: "uploads/" });
 
-// Connect to MongoDB
+// ----- Connect to MongoDB -----
 mongoose.connect(process.env.MONGO_URI || "mongodb://localhost:27017/metering");
 
 // ----- Meter Schema & Model -----
@@ -67,20 +71,21 @@ const meterReadingSchema = new mongoose.Schema({
 meterReadingSchema.index({ meter: 1, date: 1, time: 1 }, { unique: true });
 const MeterReading = mongoose.model("MeterReading", meterReadingSchema);
 
-// ----- NEW: User Schema & Model -----
+// ----- User Schema & Model (includes 2FA fields) -----
 const userSchema = new mongoose.Schema({
   username: { type: String, unique: true, required: true },
-  password: { type: String, required: true }
+  password: { type: String, required: true },
+  twoFactorSecret: { type: String },         // Store user's 2FA secret
+  twoFactorEnabled: { type: Boolean, default: false } // Flag for 2FA
 });
 const User = mongoose.model("User", userSchema);
 
-// ----- Metering Code -----
+// ----- Constants & Caches -----
 const API_URL = "https://api.dentcloud.io/v1";
 const HEADERS = {
   "x-api-key": process.env.API_KEY,
   "x-key-id": process.env.KEY_ID
 };
-
 const CACHE_EXPIRATION = 60 * 60 * 1000; // 1 hour
 let cachedMeters = { data: [], lastUpdated: 0 };
 let cachedTopics = { data: [], lastUpdated: 0 };
@@ -103,6 +108,8 @@ async function loadMeters() {
       const meters = response.data.meters || [];
       cachedMeters = { data: meters, lastUpdated: Date.now() };
       logApiRequest("getMeters", fullUrl, params, response.data);
+
+      // Insert or update each meter in Mongo
       for (const meterId of meters) {
         await Meter.updateOne(
           { meterId },
@@ -131,15 +138,19 @@ async function loadTopics() {
 }
 
 async function fetchMeterData(params) {
+  // Clean out any empty parameters
   Object.keys(params).forEach(key => {
     if (params[key] === "" || params[key] === null) delete params[key];
   });
+
+  // Format topics as an array (e.g. "[kWHNet, AnotherTopic]")
   if (params.topics) {
     params.topics = Array.isArray(params.topics) ? params.topics : [params.topics];
     if (!params.topics[0].startsWith("[")) {
       params.topics = "[" + params.topics.join(",") + "]";
     }
   }
+
   try {
     const fullUrl = `${API_URL}?${new URLSearchParams(params).toString()}`;
     console.log("\nFULL API REQUEST:", fullUrl);
@@ -160,7 +171,7 @@ function safeNumber(val) {
 function calculateMonthlyConsumption(readings) {
   const monthly = {};
   readings.forEach(record => {
-    const monthKey = record.date.substring(0, 7);
+    const monthKey = record.date.substring(0, 7); // e.g. '2023-09'
     const meter = record.meter;
     if (!monthly[meter]) {
       monthly[meter] = {};
@@ -182,6 +193,7 @@ function calculateMonthlyConsumption(readings) {
   return { monthly, consumption };
 }
 
+// ----- Nodemailer Setup -----
 const transporter = nodemailer.createTransport({
   host: process.env.EMAIL_HOST,
   port: process.env.EMAIL_PORT,
@@ -192,6 +204,7 @@ const transporter = nodemailer.createTransport({
   }
 });
 
+// ----- Cron Job Setup -----
 let jobList = [];
 let jobIdCounter = 1;
 
@@ -218,6 +231,8 @@ function scheduleJob(cronExpression, jobType) {
           };
           const result = await fetchMeterData(params);
           console.log(`Fetched data for meter ${meterId}:`, result);
+
+          // Upsert each reading into Mongo
           if (result.topics) {
             for (const reading of result.topics) {
               Object.keys(reading).forEach(async key => {
@@ -260,13 +275,16 @@ function scheduleJob(cronExpression, jobType) {
   return job;
 }
 
-// ----- Public Authentication Routes -----
+// --------------------------------------------------------------------
+// --------------  Public Authentication Routes (Login) --------------
+// --------------------------------------------------------------------
 app.get("/login", (req, res) => {
   res.render("login", { error: null });
 });
 
+// ----- UPDATED LOGIN ROUTE: Incorporates 2FA if enabled -----
 app.post("/login", async (req, res) => {
-  const { username, password } = req.body;
+  const { username, password, token } = req.body;
   try {
     const user = await User.findOne({ username });
     if (!user) {
@@ -276,6 +294,33 @@ app.post("/login", async (req, res) => {
     if (!isMatch) {
       return res.render("login", { error: "Invalid username or password" });
     }
+
+    // If user has 2FA enabled, check the TOTP token
+    if (user.twoFactorEnabled) {
+      // If no token was provided in the login form, prompt for one
+      if (!token) {
+        return res.render("login", {
+          error: "2FA token required",
+          show2FA: true,
+          username: user.username
+        });
+      }
+      // Verify the TOTP token with speakeasy
+      const verified = speakeasy.totp.verify({
+        secret: user.twoFactorSecret,
+        encoding: "base32",
+        token
+      });
+      if (!verified) {
+        return res.render("login", {
+          error: "Invalid 2FA token",
+          show2FA: true,
+          username: user.username
+        });
+      }
+    }
+
+    // User is authenticated; store in session
     req.session.userId = user._id;
     res.redirect("/");
   } catch (err) {
@@ -289,7 +334,66 @@ app.get("/logout", (req, res) => {
   res.redirect("/login");
 });
 
-// ----- User Management Routes (Protected) -----
+// --------------------------------------------------------------------
+// ---------------------- 2FA Setup & Verification ---------------------
+// --------------------------------------------------------------------
+
+// 2FA Setup: Generate a secret & show QR code
+app.get("/2fa/setup", async (req, res) => {
+  // Make sure user is logged in
+  if (!req.session.userId) {
+    return res.status(401).send("Unauthorized");
+  }
+
+  const user = await User.findById(req.session.userId);
+  if (!user) return res.status(404).send("User not found");
+
+  // Generate a new secret key for TOTP
+  const secret = speakeasy.generateSecret({ name: "MeteringApp" });
+
+  // Save the secret key in the user's database entry (base32 format)
+  user.twoFactorSecret = secret.base32;
+  await user.save();
+
+  // Generate a QR code for Google/Microsoft Authenticator
+  QRCode.toDataURL(secret.otpauth_url, (err, dataUrl) => {
+    if (err) return res.status(500).send("Error generating QR code");
+    // Render a page (2faSetup.ejs) that displays the QR code image
+    // For example, <img src="<%= qrCode %>" />
+    res.render("2faSetup", { qrCode: dataUrl });
+  });
+});
+
+// 2FA Verification: User enters the 6-digit TOTP to confirm enabling 2FA
+app.post("/2fa/verify", async (req, res) => {
+  if (!req.session.userId) {
+    return res.status(401).send("Unauthorized");
+  }
+
+  const { token } = req.body;
+  const user = await User.findById(req.session.userId);
+  if (!user || !user.twoFactorSecret) {
+    return res.status(400).send("User not found");
+  }
+
+  const verified = speakeasy.totp.verify({
+    secret: user.twoFactorSecret,
+    encoding: "base32",
+    token
+  });
+
+  if (verified) {
+    user.twoFactorEnabled = true;
+    await user.save();
+    res.send("2FA Enabled Successfully!");
+  } else {
+    res.status(400).send("Invalid Token");
+  }
+});
+
+// --------------------------------------------------------------------
+// --------------------  User Management Routes  -----------------------
+// --------------------------------------------------------------------
 function requireAuth(req, res, next) {
   if (!req.session.userId) {
     return res.redirect("/login");
@@ -322,20 +426,28 @@ app.post("/users/new", requireAuth, async (req, res) => {
   }
 });
 
-// ----- Global Authentication Middleware -----
-// This middleware forces login on all routes except for "/login" and "/logout".
+// --------------------------------------------------------------------
+// ------------  Global Authentication Middleware  ---------------------
+// --------------------------------------------------------------------
+// This forces login on all routes except /login and /logout
 app.use((req, res, next) => {
   const publicPaths = ["/login", "/logout"];
+  // If not logged in and the path is not public, redirect
   if (!req.session.userId && !publicPaths.includes(req.path)) {
     return res.redirect("/login");
   }
   next();
 });
 
-// ----- Existing Routes (All now protected by the global middleware) -----
-
+// --------------------------------------------------------------------
+// ---------------  Cron Job Management Routes  ------------------------
+// --------------------------------------------------------------------
 app.get("/cron/jobs", (req, res) => {
-  res.json(jobList.map(job => ({ id: job.id, cronExpression: job.cronExpression, jobType: job.jobType })));
+  res.json(jobList.map(job => ({
+    id: job.id,
+    cronExpression: job.cronExpression,
+    jobType: job.jobType
+  })));
 });
 
 app.post("/cron", (req, res) => {
@@ -348,6 +460,9 @@ app.post("/cron", (req, res) => {
   }
 });
 
+// --------------------------------------------------------------------
+// --------------------- Tenant CSV Management -------------------------
+// --------------------------------------------------------------------
 app.get("/tenants/export", async (req, res) => {
   try {
     const tenants = await Tenant.find({}).lean();
@@ -413,6 +528,9 @@ app.get("/tenants/email", async (req, res) => {
   res.render("tenantsEmail", { tenants });
 });
 
+// --------------------------------------------------------------------
+// --------------------- Main Page ("/") -------------------------------
+// --------------------------------------------------------------------
 app.get("/", async (req, res) => {
   await loadMeters();
   await loadTopics();
@@ -428,6 +546,9 @@ app.get("/", async (req, res) => {
   });
 });
 
+// --------------------------------------------------------------------
+// ------------------- Fetch Data from API -----------------------------
+// --------------------------------------------------------------------
 app.post(
   "/fetch-data",
   [
@@ -442,19 +563,20 @@ app.post(
   async (req, res) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
-    
+
     if (req.body.topics && !Array.isArray(req.body.topics)) {
       req.body.topics = [req.body.topics];
     }
-    
+
     let meterList = Array.isArray(req.body.meter) ? req.body.meter : [req.body.meter];
     let allMeterData = [];
-    
+
+    // Fetch data for each meter in the list
     for (const meterId of meterList) {
       let paramsForMeter = { ...req.body, meter: meterId };
       if (!paramsForMeter.day) delete paramsForMeter.day;
       if (!paramsForMeter.hour) delete paramsForMeter.hour;
-      
+
       const result = await fetchMeterData(paramsForMeter);
       if (result.topics) {
         allMeterData.push(result.topics);
@@ -464,7 +586,8 @@ app.post(
     }
     const combinedTopics = allMeterData.flat();
     const meterData = { topics: combinedTopics };
-    
+
+    // Upsert data into MeterReading collection
     for (const reading of meterData.topics) {
       Object.keys(reading).forEach(async key => {
         if (key.startsWith("kWHNet/Elm/")) {
@@ -486,7 +609,8 @@ app.post(
         }
       });
     }
-    
+
+    // Prepare data for monthly consumption chart
     let combinedReadings = [];
     meterData.topics.forEach(reading => {
       Object.keys(reading).forEach(key => {
@@ -500,12 +624,13 @@ app.post(
         }
       });
     });
-    
+
     const monthlyResult = calculateMonthlyConsumption(combinedReadings);
     const monthlyConsumption = monthlyResult.consumption;
     const monthlyDetails = monthlyResult.monthly;
     const costPerKwh = 0.10;
-    
+
+    // If only one meter was selected, optionally log history on the tenant
     if (req.body.meter) {
       try {
         const tenant = await Tenant.findOne({ meterIds: req.body.meter });
@@ -523,7 +648,7 @@ app.post(
         console.error("Error updating tenant history for meter:", err);
       }
     }
-    
+
     res.render("index", {
       meters: cachedMeters.data,
       availableTopics: cachedTopics.data,
@@ -537,6 +662,9 @@ app.post(
   }
 );
 
+// --------------------------------------------------------------------
+// -----------------------  Tenant Routes  -----------------------------
+// --------------------------------------------------------------------
 app.get("/tenants", async (req, res) => {
   try {
     const tenants = await Tenant.find({});
@@ -567,36 +695,30 @@ app.post("/tenants/emailMultiple", async (req, res) => {
       return res.status(400).send("No tenants selected.");
     }
     tenantIds = Array.isArray(tenantIds) ? tenantIds : [tenantIds];
+
     for (const id of tenantIds) {
       const tenant = await Tenant.findById(id);
       if (!tenant) continue;
       const meterReadings = await MeterReading.find({ meter: { $in: tenant.meterIds } }).sort({ date: 1, time: 1 });
       let minKWH = Infinity;
       let maxKWH = -Infinity;
+
       meterReadings.forEach(r => {
         if ((startDate && r.date < startDate) || (endDate && r.date > endDate)) return;
         let value = safeNumber(r.kWHNet);
         if (value < minKWH) minKWH = value;
         if (value > maxKWH) maxKWH = value;
       });
+
       if (minKWH === Infinity || maxKWH === -Infinity) continue;
       const totalKWH = maxKWH - minKWH;
       const totalCost = totalKWH * parseFloat(costPerKwh);
+
       const mailOptions = {
         from: process.env.EMAIL_USER,
         to: tenant.email,
         subject: `Usage Invoice for Unit ${tenant.unitNumber}`,
-        text: `Hello ${tenant.contactName},
-
-Here is your usage invoice for the period ${startDate} to ${endDate}:
-Total kWHNet: ${totalKWH.toFixed(3)} kWh
-Cost per kWh: $${parseFloat(costPerKwh).toFixed(2)}
-Total Amount Due: $${totalCost.toFixed(2)}
-
-Please remit payment via check.
-
-Thank you,
-Metering App Team`
+        text: `Hello ${tenant.contactName},\n\nHere is your usage invoice for the period ${startDate} to ${endDate}:\nTotal kWHNet: ${totalKWH.toFixed(3)} kWh\nCost per kWh: $${parseFloat(costPerKwh).toFixed(2)}\nTotal Amount Due: $${totalCost.toFixed(2)}\n\nPlease remit payment via check.\n\nThank you,\nMetering App Team`
       };
       await transporter.sendMail(mailOptions);
     }
@@ -616,7 +738,7 @@ app.get("/tenants/new", async (req, res) => {
       tenant.meterIds.forEach(mid => { assigned[mid] = true; });
     });
 
-    // Get unique meters from the MeterReading collection (used by the Meters & Assignments page)
+    // Get unique meters from the MeterReading collection
     const uniqueMeters = await MeterReading.distinct("meter");
     let available = [];
     uniqueMeters.forEach(meter => {
@@ -635,6 +757,7 @@ app.post("/tenants", async (req, res) => {
     const meterIdArray = Array.isArray(meterIds)
       ? meterIds
       : (meterIds ? meterIds.split(",").map(id => id.trim()) : []);
+
     const tenant = new Tenant({
       unitNumber,
       meterIds: meterIdArray,
@@ -650,21 +773,20 @@ app.post("/tenants", async (req, res) => {
   }
 });
 
-// --- Updated GET route for editing tenant with available meters ---
+// Edit Tenant route
 app.get("/tenants/:id/edit", async (req, res) => {
   try {
-    // Retrieve the tenant to be edited.
     const tenant = await Tenant.findById(req.params.id);
     if (!tenant) return res.status(404).send("Tenant not found.");
 
-    // Get all tenants except the current one.
+    // Get all tenants except current
     const otherTenants = await Tenant.find({ _id: { $ne: tenant._id } });
     let assigned = {};
     otherTenants.forEach(t => {
       t.meterIds.forEach(mid => { assigned[mid] = true; });
     });
 
-    // Pull available meters from the MeterReading collection (as in the Meters & Assignments page).
+    // Pull available meters
     const uniqueMeters = await MeterReading.distinct("meter");
     let available = [];
     uniqueMeters.forEach(meter => {
@@ -673,7 +795,7 @@ app.get("/tenants/:id/edit", async (req, res) => {
       }
     });
 
-    // Ensure the tenant's currently assigned meters are also included.
+    // Ensure the tenant's currently assigned meters are included
     tenant.meterIds.forEach(mid => {
       if (!available.includes(mid)) available.push(mid);
     });
@@ -684,11 +806,13 @@ app.get("/tenants/:id/edit", async (req, res) => {
   }
 });
 
-// --- Updated POST route for editing tenant to handle checkbox input ---
 app.post("/tenants/:id/edit", async (req, res) => {
   try {
     const { unitNumber, meterIds, accountNumber, contactName, email } = req.body;
-    const meterIdArray = Array.isArray(meterIds) ? meterIds : (meterIds ? meterIds.split(",").map(id => id.trim()) : []);
+    const meterIdArray = Array.isArray(meterIds)
+      ? meterIds
+      : (meterIds ? meterIds.split(",").map(id => id.trim()) : []);
+
     await Tenant.findByIdAndUpdate(req.params.id, {
       unitNumber,
       meterIds: meterIdArray,
@@ -713,6 +837,9 @@ app.get("/tenants/:id", async (req, res) => {
   }
 });
 
+// --------------------------------------------------------------------
+// -----------------------  Meters & Assignments  ----------------------
+// --------------------------------------------------------------------
 app.get("/meters", async (req, res) => {
   try {
     const uniqueMeters = await MeterReading.distinct("meter");
@@ -725,6 +852,7 @@ app.get("/meters", async (req, res) => {
     });
     let assignedMeters = [];
     let unassignedMeters = [];
+
     uniqueMeters.forEach(mid => {
       if (assigned[mid]) {
         assignedMeters.push({ meter: mid, tenant: assigned[mid] });
@@ -738,12 +866,16 @@ app.get("/meters", async (req, res) => {
   }
 });
 
+// --------------------------------------------------------------------
+// ------------------------  Invoice & Dashboard -----------------------
+// --------------------------------------------------------------------
 app.post("/tenants/:id/invoice", async (req, res) => {
   try {
     const { startDate, endDate, costPerKwh } = req.body;
     const tenant = await Tenant.findById(req.params.id);
     if (!tenant) return res.status(404).send("Tenant not found.");
     const meterReadings = await MeterReading.find({ meter: { $in: tenant.meterIds } }).sort({ date: 1, time: 1 });
+
     let minKWH = Infinity;
     let maxKWH = -Infinity;
     meterReadings.forEach(r => {
@@ -757,21 +889,12 @@ app.post("/tenants/:id/invoice", async (req, res) => {
     }
     const totalKWH = maxKWH - minKWH;
     const totalCost = totalKWH * parseFloat(costPerKwh);
+
     const mailOptions = {
       from: process.env.EMAIL_USER,
       to: tenant.email,
       subject: `Invoice for Unit ${tenant.unitNumber}`,
-      text: `Hello ${tenant.contactName},
-
-Please find your invoice details below for the period ${startDate} to ${endDate}:
-Total kWHNet: ${totalKWH.toFixed(3)} kWh
-Cost per kWh: $${parseFloat(costPerKwh).toFixed(2)}
-Total Amount Due: $${totalCost.toFixed(2)}
-
-Please remit payment via check.
-
-Thank you,
-Metering App Team`
+      text: `Hello ${tenant.contactName},\n\nPlease find your invoice details below for the period ${startDate} to ${endDate}:\nTotal kWHNet: ${totalKWH.toFixed(3)} kWh\nCost per kWh: $${parseFloat(costPerKwh).toFixed(2)}\nTotal Amount Due: $${totalCost.toFixed(2)}\n\nPlease remit payment via check.\n\nThank you,\nMetering App Team`
     };
     await transporter.sendMail(mailOptions);
     res.send(`<script>alert("Invoice email sent successfully."); window.location.href="/tenants";</script>`);
@@ -793,15 +916,16 @@ app.get("/dashboard", async (req, res) => {
     const tenants = await Tenant.find({});
     let tenantData = [];
     let buildingUsage = 0;
+
     // Process each tenant
     for (let tenant of tenants) {
-      // Find meter readings for tenant's meters where the date starts with filterMonth
+      // Find meter readings for tenant's meters where date starts with filterMonth
       const readings = await MeterReading.find({
         meter: { $in: tenant.meterIds },
         date: { $regex: '^' + filterMonth }
       }).sort({ date: 1, time: 1 });
-      
-      // Group readings by meter ID to calculate usage (max - min)
+
+      // Group readings by meter ID to calculate usage
       let usagePerMeter = {};
       tenant.meterIds.forEach(meter => {
         usagePerMeter[meter] = { min: Infinity, max: -Infinity };
@@ -812,6 +936,7 @@ app.get("/dashboard", async (req, res) => {
         if (value < usagePerMeter[meter].min) usagePerMeter[meter].min = value;
         if (value > usagePerMeter[meter].max) usagePerMeter[meter].max = value;
       });
+
       let usageFinal = {};
       let totalUsage = 0;
       for (let meter in usagePerMeter) {
@@ -838,11 +963,16 @@ app.get("/dashboard", async (req, res) => {
   }
 });
 
-// ----- Start the Server and Create Default Admin User if Needed -----
+// --------------------------------------------------------------------
+// ------------------- Start the Server + Default Admin ---------------
+// --------------------------------------------------------------------
 app.listen(PORT, async () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
+
+  // Load initial meter data + topics if desired
   await loadMeters();
   await loadTopics();
+
   // Create default admin user if not present
   const adminUser = await User.findOne({ username: "Admin" });
   if (!adminUser) {
