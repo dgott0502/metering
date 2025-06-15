@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "jest"
   },
   "keywords": [],
   "author": "",
@@ -25,6 +25,9 @@
     "nodemailer": "^6.10.0",
     "passport": "^0.7.0",
     "passport-azure-ad-oauth2": "^0.0.4",
-    "passport-google-oauth20": "^2.0.0"
+  "passport-google-oauth20": "^2.0.0"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0"
   }
 }
