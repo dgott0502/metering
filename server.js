@@ -312,6 +312,21 @@ function requireReporting(req, res, next) {
   res.status(403).send("Forbidden: You do not have the required permissions.");
 }
 
+async function requireTenantAccess(req, res, next) {
+  if (req.user && (req.user.role === "admin" || req.user.role === "reporting")) {
+    return next();
+  }
+  try {
+    const tenant = await Tenant.findById(req.params.id);
+    if (tenant && req.user && tenant.accountNumber === req.user.accountNumber) {
+      return next();
+    }
+  } catch (err) {
+    console.error("Error checking tenant access:", err);
+  }
+  res.status(403).send("Forbidden: You do not have access to this tenant.");
+}
+
 // ----- Tenant Routes -----
 // List all tenants (for admin/reporting)
 app.get("/tenants", requireAuth, requireReporting, async (req, res) => {
@@ -324,7 +339,7 @@ app.get("/tenants", requireAuth, requireReporting, async (req, res) => {
 });
 
 // Show form to create a new tenant
-app.get("/tenants/new", requireAuth, async (req, res) => {
+app.get("/tenants/new", requireAuth, requireRole("admin"), async (req, res) => {
   try {
     const tenants = await Tenant.find({});
     let assigned = {};
@@ -343,7 +358,7 @@ app.get("/tenants/new", requireAuth, async (req, res) => {
 });
 
 // Handle new tenant creation
-app.post("/tenants", requireAuth, async (req, res) => {
+app.post("/tenants", requireAuth, requireRole("admin"), async (req, res) => {
   try {
     const { unitNumber, meterIds, accountNumber, contactName, email } = req.body;
     const meterIdArray = Array.isArray(meterIds)
@@ -364,7 +379,7 @@ app.post("/tenants", requireAuth, async (req, res) => {
   }
 });
 // Export Tenant List as CSV
-app.get("/tenants/export", async (req, res) => {
+app.get("/tenants/export", requireAuth, requireRole("admin"), async (req, res) => {
   try {
     let tenants = await Tenant.find({}).lean();
     
@@ -387,7 +402,7 @@ app.get("/tenants/export", async (req, res) => {
 });
 
 // Import Tenant List from CSV
-app.post("/tenants/import", upload.single("file"), async (req, res) => {
+app.post("/tenants/import", requireAuth, requireRole("admin"), upload.single("file"), async (req, res) => {
   const results = [];
   fs.createReadStream(req.file.path)
     .pipe(csvParser())
@@ -420,7 +435,7 @@ app.post("/tenants/import", upload.single("file"), async (req, res) => {
 });
 
 // View tenant details
-app.get("/tenants/:id", requireAuth, async (req, res) => {
+app.get("/tenants/:id", requireAuth, requireTenantAccess, async (req, res) => {
   try {
     const tenant = await Tenant.findById(req.params.id);
     if (!tenant) return res.status(404).send("Tenant not found.");
@@ -432,7 +447,7 @@ app.get("/tenants/:id", requireAuth, async (req, res) => {
 });
 
 // Show form to edit a tenant
-app.get("/tenants/:id/edit", requireAuth, async (req, res) => {
+app.get("/tenants/:id/edit", requireAuth, requireRole("admin"), async (req, res) => {
   try {
     const tenant = await Tenant.findById(req.params.id);
     if (!tenant) return res.status(404).send("Tenant not found.");
@@ -457,7 +472,7 @@ app.get("/tenants/:id/edit", requireAuth, async (req, res) => {
 });
 
 // Handle tenant updates
-app.post("/tenants/:id/edit", requireAuth, async (req, res) => {
+app.post("/tenants/:id/edit", requireAuth, requireRole("admin"), async (req, res) => {
   try {
     const { unitNumber, meterIds, accountNumber, contactName, email } = req.body;
     const meterIdArray = Array.isArray(meterIds)
@@ -476,7 +491,7 @@ app.post("/tenants/:id/edit", requireAuth, async (req, res) => {
   }
 });
 // Handle invoice email for a specific tenant
-app.post("/tenants/:id/invoice", requireAuth, async (req, res) => {
+app.post("/tenants/:id/invoice", requireAuth, requireRole("admin"), async (req, res) => {
   try {
     const { startDate, endDate, costPerKwh } = req.body;
     const tenant = await Tenant.findById(req.params.id);
@@ -809,11 +824,11 @@ app.get("/users", requireAuth, requireRole("admin"), async (req, res) => {
   }
 });
 
-app.get("/users/new", requireAuth, (req, res) => {
+app.get("/users/new", requireAuth, requireRole("admin"), (req, res) => {
   res.render("newUser", { error: null });
 });
 
-app.post("/users/new", requireAuth, async (req, res) => {
+app.post("/users/new", requireAuth, requireRole("admin"), async (req, res) => {
   const { username, password, accountNumber } = req.body;
   try {
     const hashedPassword = await bcrypt.hash(password, 10);
@@ -842,12 +857,12 @@ app.post("/users/:id/update", requireAuth, requireRole("admin"), async (req, res
 });
 
 // ----- Routes for Admin/Reporting Users -----
-app.get("/tenants/email", async (req, res) => {
+app.get("/tenants/email", requireAuth, requireReporting, async (req, res) => {
   const tenants = await Tenant.find({});
   res.render("tenantsEmail", { tenants });
 });
 
-app.get("/tenants/csv", async (req, res) => {
+app.get("/tenants/csv", requireAuth, requireReporting, async (req, res) => {
   await loadMeters();
   const tenants = await Tenant.find({});
   let assigned = {};
