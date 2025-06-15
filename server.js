@@ -663,7 +663,7 @@ app.get("/account", requireAuth, async (req, res) => {
   }
 });
 
-// ----- Other Routes (e.g., /fetch-data, /api, etc.) remain unchanged -----
+// ----- Data Fetching, Home, API, and User/Admin Management Routes -----
 
 // Fetch Data Route
 app.post(
