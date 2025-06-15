@@ -211,7 +211,7 @@ function scheduleJob(cronExpression, jobType) {
           console.log(`Fetched data for meter ${meterId}:`, result);
           if (result.topics) {
             for (const reading of result.topics) {
-              Object.keys(reading).forEach(async key => {
+              for (const key of Object.keys(reading)) {
                 if (key.startsWith("kWHNet/Elm/")) {
                   const letter = key.substring("kWHNet/Elm/".length);
                   const meterSuffix = meterId + "_" + letter;
@@ -225,11 +225,12 @@ function scheduleJob(cronExpression, jobType) {
                   try {
                     await MeterReading.updateOne(filter, { $setOnInsert: update }, { upsert: true });
                   } catch (err) {
-                    if (err.code !== 11000)
+                    if (err.code !== 11000) {
                       console.error(`Error upserting meter reading for ${meterSuffix}:`, err);
+                    }
                   }
                 }
-              });
+              }
             }
           }
         }
