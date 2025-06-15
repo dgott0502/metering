@@ -514,7 +514,7 @@ Total Amount Due: $${totalCost.toFixed(2)}
 Please remit payment via check.
 
 Thank you,
-Metering App Team`
+Metering App Team`,
     };
     
     await transporter.sendMail(mailOptions);
